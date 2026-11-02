@@ -622,7 +622,7 @@ describe("buildThreadFeed", () => {
       "Moved src/original.ts → src/renamed.ts",
     ]);
     expect(summarizeToolGroup(activities.map((activity) => activity.workEntry)).summary).toBe(
-      "Changed 3 files",
+      "Edited 1 file, created 1 file, and performed 1 other action",
     );
   });
 
@@ -1920,6 +1920,43 @@ it.each([false, true])(
     expect(activity.getCopyText()).toContain(prompt);
   },
 );
+
+it("in Compact, keeps the running stage open and folds it with a step count once settled", () => {
+  const at = "2026-06-20T00:00:00.000Z";
+  const feed = buildThreadFeed([
+    projected(userMessage(), 0),
+    projected(command(), 1),
+    projected({ ...command("2026-06-20T00:00:03.000Z"), id: TurnItemId.make("second") }, 2),
+  ]);
+  const present = (running: boolean, toggled: ReadonlySet<string>) =>
+    deriveThreadFeedPresentation(
+      feed,
+      { runId, status: running ? "running" : "completed", startedAt: at, completedAt: null },
+      new Set([runId]),
+      toggled,
+      running ? at : null,
+      false,
+      undefined,
+      "compact",
+    );
+  const live = present(true, new Set());
+  const header = live.find((row) => row.type === "work-toggle");
+  expect(header).toMatchObject({ live: true, expanded: true });
+  expect(live.at(-1)).toMatchObject({
+    type: "activity-group",
+    id: expect.stringMatching(/^work-details:/),
+  });
+  const closed = new Set([header?.type === "work-toggle" ? header.groupId : ""]);
+  expect(present(true, closed).find((row) => row.type === "work-toggle")).toMatchObject({
+    expanded: false,
+  });
+  expect(present(false, closed).find((row) => row.type === "work-toggle")).toMatchObject({
+    live: false,
+    expanded: false,
+    steps: 2,
+    summary: "Ran 2 commands",
+  });
+});
 
 it("caps live thought previews while preserving reasoning detail", () => {
   const at = "2026-06-20T00:00:02.000Z";

@@ -86,7 +86,10 @@ import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
 } from "@t3tools/client-runtime/markdown-images";
-import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
+import {
+  resolveViewedImageAsset,
+  WORK_LOG_DENSITY,
+} from "@t3tools/client-runtime/work-log/presentation";
 import {
   renderCodexInlineDirectivesAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
@@ -1786,6 +1789,7 @@ function renderFeedEntry(
         rowSizing={props.workRowSizing}
         expanded={entry.expanded}
         hiddenCount={entry.hiddenCount}
+        steps={entry.steps}
         iconSubtleColor={iconSubtleColor}
         summary={entry.summary}
         summaryKind={entry.summaryKind}
@@ -2590,6 +2594,7 @@ function useThreadFeedPresentation(
       props.activeWorkStartedAt,
       props.runlessWorkActive ?? false,
       feedCache,
+      WORK_LOG_DENSITY,
     ),
     props.feed,
     props.queuedMessages,

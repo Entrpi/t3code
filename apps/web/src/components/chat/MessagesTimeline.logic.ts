@@ -27,7 +27,10 @@ import {
   toolGroupAction,
   toolGroupSummaryKind,
   contextCompactionTokenCounts,
+  liveWorkGroupId,
+  workGroupExpanded,
   type ToolGroupSummaryKind,
+  type WorkLogDensity,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
   deriveRevertTurnCountByUserMessageId,
@@ -563,6 +566,8 @@ type MessagesTimelineRowContent =
       runId?: RunId | null;
       groupId: string;
       hiddenCount: number;
+      /** Compact density only. */
+      steps?: number;
       expanded: boolean;
       summary: string;
       summaryKind: ToolGroupSummaryKind;
@@ -1422,6 +1427,7 @@ export function deriveMessagesTimelineRows(input: {
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
   expandedWorkGroupIds?: ReadonlySet<string>;
+  workLogDensity?: WorkLogDensity;
   isWorking: boolean;
   /** Native subagent work has no app run; runless entries form the live response. */
   runlessWorkActive?: boolean;
@@ -1432,6 +1438,7 @@ export function deriveMessagesTimelineRows(input: {
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
+  const density = input.workLogDensity ?? "standard";
   const timelineEntries = timelineRowEntries(input.timelineEntries);
   // Classifying commands is the costly part, so only the entries that are shown are presented.
   const settleRun = settleFileActions(
@@ -1589,7 +1596,10 @@ export function deriveMessagesTimelineRows(input: {
   const activeWorkRow =
     activeWorkAnchor && latestVisibleToolEntry && !latestToolFailed
       ? (() => {
-          const groupId = workGroupId(activeWorkAnchor.id);
+          const groupId =
+            density === "compact"
+              ? liveWorkGroupId(workGroupId(activeWorkAnchor.id))
+              : workGroupId(activeWorkAnchor.id);
           return {
             kind: "work-live" as const,
             id: latestToolKeepsActivityLive
@@ -1601,7 +1611,7 @@ export function deriveMessagesTimelineRows(input: {
             )!,
             groupedEntries: presentEntries(visibleActiveToolEntries.map((entry) => entry.entry)),
             groupId,
-            expanded: input.expandedWorkGroupIds?.has(groupId) ?? false,
+            expanded: workGroupExpanded(groupId, input.expandedWorkGroupIds),
             active: latestToolKeepsActivityLive,
             ...(latestThoughtEntry ? { thought: latestThoughtEntry.entry } : {}),
           };
@@ -1923,7 +1933,7 @@ export function deriveMessagesTimelineRows(input: {
               : {
                   displayLabel:
                     toolGroupAction(singleEntry) === "edit"
-                      ? summarizeToolGroup(visibleGroupedEntries).summary
+                      ? summarizeToolGroup(visibleGroupedEntries, density).summary
                       : singleToolCallLabel(singleEntry),
                 }),
           });
@@ -1950,6 +1960,10 @@ export function deriveMessagesTimelineRows(input: {
           const latestToolEntry = visibleGroupedEntries.findLast(workLogEntryIsToolLike);
           const singleEntry =
             visibleGroupedEntries.length === 1 ? (visibleGroupedEntries[0] ?? null) : null;
+          const groupSummary =
+            singleEntry !== null && !workLogEntryIsToolLike(singleEntry)
+              ? { summary: singleEntry.label, steps: 0 }
+              : summarizeToolGroup(visibleGroupedEntries, density);
           nextRows.push({
             kind: "work-toggle",
             id: `work-toggle:${timelineEntry.id}`,
@@ -1957,11 +1971,11 @@ export function deriveMessagesTimelineRows(input: {
             runId: timelineEntry.entry.runId ?? null,
             groupId,
             hiddenCount: visibleGroupedEntries.length,
+            ...(density === "compact" && groupSummary.steps > 0
+              ? { steps: groupSummary.steps }
+              : {}),
             expanded,
-            summary:
-              singleEntry !== null && !workLogEntryIsToolLike(singleEntry)
-                ? singleEntry.label
-                : summarizeToolGroup(visibleGroupedEntries).summary,
+            summary: groupSummary.summary,
             summaryKind,
             ...(groupToolSurface ? { toolSurface: groupToolSurface } : {}),
             ...(groupToolIcon ? { toolIcon: groupToolIcon } : {}),
@@ -2530,6 +2544,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.runId === bw.runId &&
         a.groupId === bw.groupId &&
         a.hiddenCount === bw.hiddenCount &&
+        a.steps === bw.steps &&
         a.expanded === bw.expanded &&
         a.summary === bw.summary &&
         a.summaryKind === bw.summaryKind &&

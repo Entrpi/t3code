@@ -589,6 +589,7 @@ export function WorkGroupToggleTimelineRow({
   return (
     <WorkGroupHeader
       label={row.summary}
+      steps={row.steps}
       iconName={row.toolSurface ?? toolGroupSummaryIconName(row.summaryKind)}
       toolIcon={row.toolIcon}
       failed={row.hasFailure}
@@ -602,6 +603,7 @@ export function WorkGroupToggleTimelineRow({
 
 function WorkGroupHeader(props: {
   label: string;
+  steps?: number | undefined;
   iconName: WorkEntryIconName;
   toolIcon?: ToolActivityIcon | undefined;
   failed?: boolean | undefined;
@@ -610,9 +612,12 @@ function WorkGroupHeader(props: {
   timestampFormat: TimestampFormat;
   onToggle: () => void;
 }) {
+  const stepsLabel =
+    props.steps === undefined ? "" : `${props.steps} ${props.steps === 1 ? "step" : "steps"}`;
+  const accessibleLabel = stepsLabel ? `${props.label}, ${stepsLabel}` : props.label;
   return (
     <WorkLogButton
-      aria-label={props.failed ? `${props.label}, tool call failed` : props.label}
+      aria-label={props.failed ? `${accessibleLabel}, tool call failed` : accessibleLabel}
       aria-expanded={props.expanded}
       onClick={props.onToggle}
       icon={
@@ -623,7 +628,18 @@ function WorkGroupHeader(props: {
           muted
         />
       }
-      label={<span className="block truncate">{props.label}</span>}
+      label={
+        stepsLabel ? (
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="truncate">{props.label}</span>
+            <span className="shrink-0 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+              · {stepsLabel}
+            </span>
+          </span>
+        ) : (
+          <span className="block truncate">{props.label}</span>
+        )
+      }
       trailing={
         <TimelineRowTimestamp createdAt={props.createdAt} timestampFormat={props.timestampFormat} />
       }

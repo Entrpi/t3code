@@ -23,9 +23,11 @@ import { formatTokens } from "@t3tools/shared/usageFormat";
 import { classifyToolActivity } from "@t3tools/shared/toolActivity";
 import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
 
-import type {
-  WorkEntryCommandAction,
-  WorkEntryFileAction,
+import {
+  fileActionVerb,
+  type FileActionKind,
+  type WorkEntryCommandAction,
+  type WorkEntryFileAction,
 } from "@t3tools/client-runtime/work-log/file-actions";
 
 import {
@@ -124,6 +126,28 @@ export type ToolGroupAction =
   | "search"
   | "other"
   | "update";
+
+/** Compact names every action in a group with a step count and keeps the running stage open. */
+export type WorkLogDensity = "standard" | "compact";
+
+export const WORK_LOG_DENSITY: WorkLogDensity = "compact";
+
+const LIVE_WORK_GROUP_SUFFIX = ":live";
+
+/** A running stage that opens by default; closing it is what the expanded set records. */
+export function liveWorkGroupId(groupId: string): string {
+  return `${groupId}${LIVE_WORK_GROUP_SUFFIX}`;
+}
+
+export function workGroupExpanded(
+  groupId: string,
+  toggledGroupIds: ReadonlySet<string> | undefined,
+): boolean {
+  const toggled = toggledGroupIds?.has(groupId) ?? false;
+  return groupId.endsWith(LIVE_WORK_GROUP_SUFFIX) ? !toggled : toggled;
+}
+
+type SummaryKey = ToolGroupAction | T3McpToolSummaryAction | `file-${FileActionKind}` | "plan";
 
 export type ToolGroupSummaryKind =
   | "pull-request"
@@ -436,6 +460,13 @@ function toolGroupActionCount(
   action: ToolGroupAction,
   entries: ReadonlyArray<WorkLogPresentationEntry>,
 ): number {
+  if (action === "read") {
+    return entries.reduce(
+      (count, entry) =>
+        count + (entry.commandAction?.kind === "read" ? entry.commandAction.paths.length : 1),
+      0,
+    );
+  }
   if (action !== "edit") return entries.length;
   const changedFiles = new Set<string>();
   let editsWithoutFileDetails = 0;
@@ -486,6 +517,40 @@ function toolGroupActionLabel(action: ToolGroupAction, count: number): string {
   }
 }
 
+/** Rows that name a file action, read, listing, search or plan update are counted by what they say. */
+function summaryAction(entry: WorkLogPresentationEntry): ToolGroupAction {
+  if (entry.commandAction) {
+    return entry.commandAction.kind === "search" ? "code-search" : "read";
+  }
+  return toolGroupAction(entry);
+}
+
+function summaryKey(entry: WorkLogPresentationEntry, action: ToolGroupAction): SummaryKey {
+  if (entry.fileAction) return `file-${entry.fileAction.kind}`;
+  if (entry.itemType === "todo_list") return "plan";
+  return action;
+}
+
+function summaryLabel(
+  key: SummaryKey,
+  action: ToolGroupAction,
+  entries: ReadonlyArray<WorkLogPresentationEntry>,
+  density: WorkLogDensity,
+): string {
+  if (key === "plan") {
+    return entries.length === 1 ? "Updated the plan" : `Updated the plan ${entries.length} times`;
+  }
+  const fileKind = entries[0]?.fileAction?.kind;
+  if (key.startsWith("file-") && fileKind !== undefined) {
+    const count = new Set(entries.map((entry) => entry.fileAction?.path)).size;
+    return `${fileActionVerb(fileKind)} ${count} ${count === 1 ? "file" : "files"}`;
+  }
+  const count = toolGroupActionCount(action, entries);
+  return action === "read" && density === "compact"
+    ? `Inspected ${count} ${count === 1 ? "file" : "files"}`
+    : toolGroupActionLabel(action, count);
+}
+
 function t3ToolSummaryCall(entry: WorkLogPresentationEntry): T3ToolSummaryCall {
   return {
     input: workEntryToolInput(entry),
@@ -501,10 +566,15 @@ function t3ToolSummaryCall(entry: WorkLogPresentationEntry): T3ToolSummaryCall {
   };
 }
 
-function summaryActionPriority(action: ToolGroupAction | T3McpToolSummaryAction): number {
+function summaryActionPriority(action: SummaryKey): number {
   switch (action) {
     case "command":
     case "edit":
+    case "file-create":
+    case "file-edit":
+    case "file-delete":
+    case "file-move":
+    case "file-write":
     case "delegate":
     case "task-cancel":
     case "thread-create":
@@ -544,20 +614,58 @@ function summaryActionPriority(action: ToolGroupAction | T3McpToolSummaryAction)
   }
 }
 
-export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEntry>): {
+interface ToolGroupSummary {
   summary: string;
   hasFailure: boolean;
-} {
+  /** Tool rows in the group; thoughts are not steps. */
+  steps: number;
+}
+
+// Rows are re-derived on every feed update, and a settled group passes the same entries again.
+const toolGroupSummaryCache = new WeakMap<
+  WorkLogPresentationEntry,
+  {
+    readonly entries: ReadonlyArray<WorkLogPresentationEntry>;
+    readonly density: WorkLogDensity;
+    readonly summary: ToolGroupSummary;
+  }
+>();
+
+export function summarizeToolGroup(
+  entries: ReadonlyArray<WorkLogPresentationEntry>,
+  density: WorkLogDensity = "standard",
+): ToolGroupSummary {
+  const first = entries[0];
+  if (first === undefined) return computeToolGroupSummary(entries, density);
+  const cached = toolGroupSummaryCache.get(first);
+  if (
+    cached !== undefined &&
+    cached.density === density &&
+    cached.entries.length === entries.length &&
+    cached.entries.every((entry, index) => entry === entries[index])
+  ) {
+    return cached.summary;
+  }
+  const summary = computeToolGroupSummary(entries, density);
+  toolGroupSummaryCache.set(first, { entries, density, summary });
+  return summary;
+}
+
+function computeToolGroupSummary(
+  entries: ReadonlyArray<WorkLogPresentationEntry>,
+  density: WorkLogDensity,
+): ToolGroupSummary {
   const toolEntries = entries.filter((entry) => entry.itemType !== "reasoning");
   if (entries.length > 0 && toolEntries.length === 0) {
     return {
       summary: entries.length === 1 ? "Thought" : `Thought (×${entries.length})`,
       hasFailure: false,
+      steps: 0,
     };
   }
   entries = toolEntries;
   const groups = new Map<
-    ToolGroupAction | T3McpToolSummaryAction,
+    SummaryKey,
     {
       action: ToolGroupAction;
       t3Action: T3McpToolSummaryAction | null;
@@ -574,30 +682,32 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
       sources.set(entry.toolSource.key, entry.toolSource);
       continue;
     }
-    const action = toolGroupAction(entry);
-    const key = t3Action ?? action;
+    const action = summaryAction(entry);
+    const key = t3Action ?? summaryKey(entry, action);
     const group = groups.get(key);
     if (group) group.entries.push(entry);
     else groups.set(key, { action, t3Action, entries: [entry] });
   }
-  const summaries = [...groups].map(([action, group], index) => ({
+  const summaries = [...groups].map(([key, group], index) => ({
     index,
     count: group.entries.length,
-    priority: summaryActionPriority(action),
+    priority: summaryActionPriority(key),
     ...(group.t3Action
       ? summarizeT3ToolCalls(group.t3Action, group.entries.map(t3ToolSummaryCall))
       : {
-          label: toolGroupActionLabel(
-            group.action,
-            toolGroupActionCount(group.action, group.entries),
-          ),
+          label: summaryLabel(key, group.action, group.entries, density),
           failedCount: group.entries.filter(workEntryDisplayIndicatesToolFailure).length,
         }),
   }));
-  const selected = [...summaries]
-    .sort((a, b) => a.priority - b.priority || a.index - b.index)
-    .slice(0, 2)
-    .sort((a, b) => a.index - b.index);
+  const selected =
+    density === "compact"
+      ? [...summaries].sort(
+          (a, b) => Number(a.priority === 2) - Number(b.priority === 2) || a.index - b.index,
+        )
+      : [...summaries]
+          .sort((a, b) => a.priority - b.priority || a.index - b.index)
+          .slice(0, 2)
+          .sort((a, b) => a.index - b.index);
   const labels = selected.map(({ label }) => label);
   if (sources.size > 0) {
     const sourceValues = [...sources.values()];
@@ -630,7 +740,11 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
     sentenceLabels.length < 3
       ? sentenceLabels.join(" and ")
       : `${sentenceLabels.slice(0, -1).join(", ")}, and ${sentenceLabels.at(-1)}`;
-  return { summary, hasFailure: summaries.some((group) => group.failedCount > 0) };
+  return {
+    summary,
+    hasFailure: summaries.some((group) => group.failedCount > 0),
+    steps: entries.length,
+  };
 }
 
 export function toolGroupSummaryKind(

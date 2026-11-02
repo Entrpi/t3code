@@ -15,9 +15,10 @@ T3 Orchestrator summaries describe the actions taken, such as **Ran 2 commands a
 to 3 threads**. Repeated messages to the same destinations show both counts: **Sent 5 messages to
 2 threads**. Thread creation counts the threads returned by the tool, including batches.
 
-Groups with many kinds of activity show up to two specific action categories and a count of the
-remaining actions. Commands, file changes, and orchestration changes take priority over reads and
-status checks. Expand the group for the full list.
+A group's summary names each kind of action in the order it happened, such as **Inspected 2 files,
+created 1 file, and ran 1 command**, with the number of steps beside it. While a turn runs, its
+newest work stays open; earlier work folds into a summary when the agent replies. Expand a summary
+for the full list.
 
 Failed calls do not count as successful messages or creations. Waiting on a thread does not mean
 it finished, and an interrupt or cancellation request does not mean the thread stopped. When tool
