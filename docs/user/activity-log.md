@@ -5,6 +5,12 @@ commands, tool inputs, status, and exit codes. Expand a tool call to see its out
 command's output updates live, and long output shows only its most recent part. Use **Open diff** on
 a file change to review its contents.
 
+Each changed file gets its own row that says **Created**, **Edited**, **Deleted** or **Moved**.
+Line counts appear when the turn ends. A shell command that writes to a file says **Wrote** while
+the turn runs, because the command alone does not show whether the file is new. When the turn ends,
+the row says **Created** or **Edited**. Simple shell reads, listings and searches show as **Read**,
+**Listed** and **Searched** rows. Expand a row to see the command.
+
 T3 Orchestrator summaries describe the actions taken, such as **Ran 2 commands and sent messages
 to 3 threads**. Repeated messages to the same destinations show both counts: **Sent 5 messages to
 2 threads**. Thread creation counts the threads returned by the tool, including batches.

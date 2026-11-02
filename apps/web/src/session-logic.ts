@@ -31,6 +31,10 @@ import {
   contextCompactionLabel,
   workEntryIndicatesToolFailure,
 } from "@t3tools/client-runtime/work-log/presentation";
+import type {
+  WorkEntryCommandAction,
+  WorkEntryFileAction,
+} from "@t3tools/client-runtime/work-log/file-actions";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type {
   ThreadPendingApproval,
@@ -76,6 +80,8 @@ export interface WorkLogEntry {
   readonly command?: string;
   readonly rawCommand?: string;
   readonly changedFiles?: ReadonlyArray<string>;
+  readonly fileAction?: WorkEntryFileAction | undefined;
+  readonly commandAction?: WorkEntryCommandAction | undefined;
   readonly tone: "thinking" | "tool" | "info" | "error";
   readonly toolTitle?: string;
   readonly toolCallId?: string;

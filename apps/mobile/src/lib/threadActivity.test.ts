@@ -608,11 +608,22 @@ describe("buildThreadFeed", () => {
         { operation: "update", path: "src/renamed.ts", oldPath: "src/original.ts" },
       ],
     };
-    const activity = buildThreadFeed([projected(item, 0)]).flatMap((entry) =>
-      entry.type === "activity-group" ? entry.activities : [],
-    )[0]!;
-    expect(workEntryRowLabel(activity.workEntry)).toBe("src/a.ts +2 more");
-    expect(summarizeToolGroup([activity.workEntry]).summary).toBe("Changed 3 files");
+    const feed = buildThreadFeed([projected(item, 0)]);
+    const groupId = `work-group:${feed[0]?.type === "activity-group" ? feed[0].activities[0]?.id : ""}`;
+    const activities = deriveThreadFeedPresentation(
+      feed,
+      null,
+      new Set([runId]),
+      new Set([groupId]),
+    ).flatMap((entry) => (entry.type === "activity-group" ? entry.activities : []));
+    expect(activities.map((activity) => workEntryRowLabel(activity.workEntry))).toEqual([
+      "Edited src/a.ts",
+      "Created src/b.ts",
+      "Moved src/original.ts → src/renamed.ts",
+    ]);
+    expect(summarizeToolGroup(activities.map((activity) => activity.workEntry)).summary).toBe(
+      "Changed 3 files",
+    );
   });
 
   it("anchors feedback before later committed turns", () => {

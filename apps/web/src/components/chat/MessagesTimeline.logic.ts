@@ -69,6 +69,13 @@ import { mcpAppReferencesEqual, type McpAppReference } from "@t3tools/shared/mcp
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
+  formatCommandActionLabel,
+  formatFileActionLabel,
+  presentWorkEntries,
+  readTitleWithPath,
+  settleFileActions,
+} from "@t3tools/client-runtime/work-log/file-actions";
+import {
   collectToolFilePaths,
   formatReadToolLabel,
   formatSearchToolLabel,
@@ -139,6 +146,9 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
   }
   const toolPresentation = resolveWorkEntryToolPresentation(entry);
   if (toolPresentation) return toolPresentation.displayName;
+  const formatPath = (path: string) => formatWorkspaceRelativePath(path, workspaceRoot);
+  if (entry.fileAction) return formatFileActionLabel(entry.fileAction, formatPath);
+  if (entry.commandAction) return formatCommandActionLabel(entry.commandAction, formatPath);
   if (entry.command?.trim()) return commandDisplayText(entry.command);
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
@@ -150,7 +160,15 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
   }
   const readPaths = action === "read" ? workEntryReadPaths(entry, workspaceRoot) : [];
   if (action === "read" && readPaths[0]) {
-    return formatReadToolLabel(readPaths[0], readPaths.length - 1);
+    const titled =
+      readPaths.length === 1
+        ? readTitleWithPath(
+            entry.structuredPayload?.title,
+            workEntryReadRawPaths(entry)[0]!,
+            readPaths[0],
+          )
+        : null;
+    return titled ?? formatReadToolLabel(readPaths[0], readPaths.length - 1);
   }
   const providerRetry =
     entry.projectedItem?.item.type === "error" && entry.projectedItem.item.retry !== undefined;
@@ -1365,6 +1383,12 @@ function timelineRowEntries(entries: ReadonlyArray<TimelineEntry>) {
   return withoutSubagentDelegationRows(settleSupersededReasoning(entries));
 }
 
+function* timelineWorkItems(entries: ReadonlyArray<TimelineEntry>) {
+  for (const entry of entries) {
+    if (entry.kind === "work" && entry.entry.structuredPayload) yield entry.entry.structuredPayload;
+  }
+}
+
 function deriveTimelineTurnFolds(
   input: Pick<
     MessagesTimelineRowsInput,
@@ -1409,6 +1433,12 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
   const timelineEntries = timelineRowEntries(input.timelineEntries);
+  // Classifying commands is the costly part, so only the entries that are shown are presented.
+  const settleRun = settleFileActions(
+    () => timelineWorkItems(timelineEntries),
+    input.turnDiffSummaries,
+  );
+  const presentEntries = (entries: WorkLogEntry[]) => presentWorkEntries(entries, settleRun);
   const isPendingApproval = (entry: WorkLogEntry) => {
     const item = entry.projectedItem?.item;
     return (
@@ -1566,8 +1596,10 @@ export function deriveMessagesTimelineRows(input: {
               ? LIVE_ACTIVITY_ROW_ID
               : `work-live:${activeWorkAnchor.id}`,
             createdAt: activeWorkAnchor.createdAt,
-            entry: (latestRunningToolEntry ?? latestVisibleToolEntry).entry,
-            groupedEntries: visibleActiveToolEntries.map((entry) => entry.entry),
+            entry: presentEntries([(latestRunningToolEntry ?? latestVisibleToolEntry).entry]).at(
+              -1,
+            )!,
+            groupedEntries: presentEntries(visibleActiveToolEntries.map((entry) => entry.entry)),
             groupId,
             expanded: input.expandedWorkGroupIds?.has(groupId) ?? false,
             active: latestToolKeepsActivityLive,
@@ -1807,13 +1839,15 @@ export function deriveMessagesTimelineRows(input: {
         timelineEntry.entry.itemType === "notification" ||
         timelineEntry.entry.questionAnswer !== undefined
       ) {
-        nextRows.push({
-          kind: "work",
-          id: timelineEntry.id,
-          createdAt: timelineEntry.createdAt,
-          groupedEntries: [timelineEntry.entry],
-          isExpandedToolGroup: false,
-        });
+        for (const entry of presentEntries([timelineEntry.entry])) {
+          nextRows.push({
+            kind: "work",
+            id: entry === timelineEntry.entry ? timelineEntry.id : entry.id,
+            createdAt: timelineEntry.createdAt,
+            groupedEntries: [entry],
+            isExpandedToolGroup: false,
+          });
+        }
         continue;
       }
       const groupedEntries = [timelineEntry.entry];
@@ -1845,8 +1879,10 @@ export function deriveMessagesTimelineRows(input: {
         groupedEntries.push(nextEntry.entry);
         cursor += 1;
       }
-      const visibleGroupedEntries = groupedEntries.filter((entry) =>
-        workEntryIsVisibleInGroup(entry, workEntryIsInActiveRun(entry)),
+      const visibleGroupedEntries = presentEntries(
+        groupedEntries.filter((entry) =>
+          workEntryIsVisibleInGroup(entry, workEntryIsInActiveRun(entry)),
+        ),
       );
       if (visibleGroupedEntries.length > 0) {
         const activeInProgressToolEntries = visibleGroupedEntries.filter(workEntryIsInActiveRun);
@@ -1881,10 +1917,15 @@ export function deriveMessagesTimelineRows(input: {
             createdAt: timelineEntry.createdAt,
             groupedEntries: visibleGroupedEntries,
             isExpandedToolGroup: false,
-            displayLabel:
-              toolGroupAction(singleEntry) === "edit"
-                ? summarizeToolGroup(visibleGroupedEntries).summary
-                : singleToolCallLabel(singleEntry),
+            // A file or command action names itself, with the workspace-relative path.
+            ...(singleEntry.fileAction || singleEntry.commandAction
+              ? {}
+              : {
+                  displayLabel:
+                    toolGroupAction(singleEntry) === "edit"
+                      ? summarizeToolGroup(visibleGroupedEntries).summary
+                      : singleToolCallLabel(singleEntry),
+                }),
           });
         } else {
           const groupId = workGroupId(timelineEntry.id);

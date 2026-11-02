@@ -8,6 +8,14 @@ import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subage
 import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRuntime";
 import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
 import {
+  formatCommandActionLabel,
+  formatFileActionLabel,
+  presentWorkEntry,
+  readTitleWithPath,
+  settleFileActions,
+  type FileActionSettlement,
+} from "@t3tools/client-runtime/work-log/file-actions";
+import {
   turnItemDetailRevision,
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
@@ -118,8 +126,8 @@ export interface ThreadFeedActivity {
   readonly workEntry: WorkLogPresentationEntry;
   readonly groupedToolDetail?: boolean;
   readonly live?: boolean;
-  /** Lone calls carry the group header's label and id until a second call joins. */
-  readonly groupStandIn?: { readonly groupId: string; readonly label: string };
+  /** Lone calls carry the group header's id, and its label unless the row names itself. */
+  readonly groupStandIn?: { readonly groupId: string; readonly label?: string };
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
 }
 
@@ -252,12 +260,21 @@ function compactWorkEntryText(value: string): string {
   return truncate(value.replace(/\s+/gu, " "), WORK_LOG_LABEL_MAX_LENGTH);
 }
 
-export function workEntryRowLabel(entry: WorkLogPresentationEntry, expanded = false): string {
+export function workEntryRowLabel(
+  entry: WorkLogPresentationEntry,
+  expanded = false,
+  formatPath?: (path: string) => string,
+): string {
   if (entry.itemType === "fork") return entry.label;
   if (expanded && entry.itemType === "reasoning")
     return entry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought";
   const presentation = resolveWorkEntryToolPresentation(entry);
   if (presentation) return presentation.displayName;
+  if (entry.fileAction)
+    return compactWorkEntryText(formatFileActionLabel(entry.fileAction, formatPath));
+  if (entry.commandAction) {
+    return compactWorkEntryText(formatCommandActionLabel(entry.commandAction, formatPath));
+  }
   if (entry.command?.trim()) return compactWorkEntryText(commandDisplayText(entry.command));
   const action = toolGroupAction(entry);
   const isToolRead = action === "read" && entry.itemType === "dynamic_tool";
@@ -273,9 +290,15 @@ export function workEntryRowLabel(entry: WorkLogPresentationEntry, expanded = fa
     if (searchLabel) return searchLabel;
   }
   if (isToolRead) {
-    const [firstPath] = entry.changedFiles ?? collectToolFilePaths(entry.toolData);
+    const paths = entry.changedFiles ?? collectToolFilePaths(entry.toolData);
+    const [firstPath] = paths;
     if (firstPath) {
-      return formatReadToolLabel(firstPath, Math.max(0, (entry.changedFiles?.length ?? 1) - 1));
+      const displayPath = formatPath?.(firstPath) ?? firstPath;
+      const titled =
+        paths.length === 1
+          ? readTitleWithPath(entry.structuredPayload?.title, firstPath, displayPath)
+          : null;
+      return titled ?? formatReadToolLabel(displayPath, Math.max(0, paths.length - 1));
     }
     if (!expanded) return "Read file";
   }
@@ -1347,6 +1370,82 @@ function presentationRestart(
   return { ...restart, index };
 }
 
+const presentedActivitiesCache = new WeakMap<
+  ThreadFeedActivity,
+  {
+    readonly workEntries: ReadonlyArray<WorkLogPresentationEntry>;
+    readonly activities: ReadonlyArray<ThreadFeedActivity>;
+  }
+>();
+
+/** A shown patch gives one activity per file, and a shown command names its action. */
+function presentActivity(
+  activity: ThreadFeedActivity,
+  settle: FileActionSettlement,
+): ReadonlyArray<ThreadFeedActivity> {
+  const workEntries = presentWorkEntry(activity.workEntry, settle);
+  if (workEntries.length === 1 && workEntries[0] === activity.workEntry) return [activity];
+  const cached = presentedActivitiesCache.get(activity);
+  if (cached?.workEntries === workEntries) return cached.activities;
+  const activities = workEntries.map((workEntry, index): ThreadFeedActivity => {
+    if (workEntry.itemType !== "file_change") return { ...activity, workEntry };
+    const summary = workEntry.label;
+    const detail = workEntry.changedFiles?.[0] ?? null;
+    return {
+      ...activity,
+      id: index === 0 ? activity.id : `${activity.id}:${index}`,
+      summary,
+      detail,
+      getCopyText: memoizeValue(() =>
+        [summary, detail, activity.getFullDetail()]
+          .filter(
+            (value, index, values): value is string =>
+              Boolean(value) && values.indexOf(value) === index,
+          )
+          .join("\n"),
+      ),
+      workEntry,
+    };
+  });
+  presentedActivitiesCache.set(activity, { workEntries, activities });
+  return activities;
+}
+
+// A group is one run's, so it stays presented while that run's settled rows are the same.
+const presentedActivityGroups = new WeakMap<
+  ThreadFeedActivityGroup,
+  {
+    readonly settled: ReadonlyMap<string, unknown>;
+    readonly group: ThreadFeedActivityGroup;
+  }
+>();
+
+function presentActivityGroup(
+  group: ThreadFeedActivityGroup,
+  settle: FileActionSettlement,
+): ThreadFeedActivityGroup {
+  const settled = settle(group.runId);
+  const cached = presentedActivityGroups.get(group);
+  if (cached?.settled === settled) return cached.group;
+  const activities = group.activities.flatMap((activity) => presentActivity(activity, settle));
+  const presented =
+    activities.length === group.activities.length &&
+    activities.every((activity, index) => activity === group.activities[index])
+      ? group
+      : { ...group, activities };
+  presentedActivityGroups.set(group, { settled, group: presented });
+  return presented;
+}
+
+function feedTurnItems(feed: ReadonlyArray<ThreadFeedEntry>) {
+  const items: OrchestrationV2TurnItem[] = [];
+  for (const entry of feed) {
+    if (entry.type !== "activity-group") continue;
+    for (const activity of entry.activities) items.push(activity.projectedItem.item);
+  }
+  return items;
+}
+
 export function deriveThreadFeedPresentation(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestRun: ThreadFeedLatestRun | null,
@@ -1429,6 +1528,15 @@ export function deriveThreadFeedPresentation(
       for (const entryId of fold.hiddenEntryIds) collapsedEntryIds.add(entryId);
     }
   }
+  // Classifying commands is the costly part, so only the groups that are shown are presented.
+  const settleRun = settleFileActions(
+    () => feedTurnItems(feed),
+    feed.flatMap((entry) =>
+      entry.type === "message" && entry.message.checkpointSummary
+        ? [entry.message.checkpointSummary]
+        : [],
+    ),
+  );
   for (let sourceIndex = 0; sourceIndex < sourceFeed.length; sourceIndex += 1) {
     const entry = sourceFeed[sourceIndex]!;
     const feedIndex = retainedFeedIndices[sourceIndex]!;
@@ -1485,31 +1593,33 @@ export function deriveThreadFeedPresentation(
       continue;
     }
     if (!collapsedEntryIds.has(entry.id)) {
+      const shown =
+        entry.type === "activity-group" ? presentActivityGroup(entry, settleRun) : entry;
       if (
-        entry.type === "activity-group" &&
-        entry.runId !== null &&
-        failedRunIds.has(entry.runId)
+        shown.type === "activity-group" &&
+        shown.runId !== null &&
+        failedRunIds.has(shown.runId)
       ) {
-        let rows = failedActivityGroupsCache.get(entry);
+        let rows = failedActivityGroupsCache.get(shown);
         if (!rows) {
           rows =
-            entry.activities.length === 1
-              ? [entry]
-              : entry.activities.map((activity) => ({
+            shown.activities.length === 1
+              ? [shown]
+              : shown.activities.map((activity) => ({
                   type: "activity-group" as const,
                   id: activity.id,
                   createdAt: activity.createdAt,
                   runId: activity.runId,
                   activities: [activity],
                 }));
-          failedActivityGroupsCache.set(entry, rows);
+          failedActivityGroupsCache.set(shown, rows);
         }
         result.push(...rows);
         continue;
       }
       appendPresentedFeedEntry(
         result,
-        entry,
+        shown,
         expandedWorkGroupIds,
         activeRunId,
         isWorking,
@@ -1796,7 +1906,16 @@ function appendToolGroupRows(
       id,
       createdAt: singleActivity.createdAt,
       runId: singleActivity.runId,
-      activities: [{ ...singleActivity, live: shimmer, groupStandIn: { groupId, label: summary } }],
+      activities: [
+        {
+          ...singleActivity,
+          live: shimmer,
+          groupStandIn:
+            !live && (singleActivity.workEntry.fileAction || singleActivity.workEntry.commandAction)
+              ? { groupId }
+              : { groupId, label: summary },
+        },
+      ],
       // No trailing margin lets Thinking or a growing group replace the row without shifting the feed.
       continuesWorkLog: true,
     });
