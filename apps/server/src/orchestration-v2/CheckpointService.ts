@@ -462,9 +462,13 @@ export const layer: Layer.Layer<
                     .filter((file) => !isGitImport(file, authoredPaths))
                     .map((file) => ({
                       path: file.path,
-                      kind: "modified",
+                      ...(file.previousPath === undefined
+                        ? {}
+                        : { previousPath: file.previousPath }),
+                      kind: file.kind ?? "modified",
                       additions: file.additions,
                       deletions: file.deletions,
+                      ...(file.binary ? { binary: file.binary } : {}),
                     })),
                 ),
                 Effect.catch((cause) =>

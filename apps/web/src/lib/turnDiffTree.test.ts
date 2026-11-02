@@ -41,11 +41,13 @@ describe("buildTurnDiffTree", () => {
     ]);
   });
 
-  it("builds nested directory nodes with aggregated stats", () => {
+  it("builds nested directory nodes with aggregated stats and each file's change", () => {
     const tree = buildTurnDiffTree([
       { path: "src/index.ts", kind: "modified", additions: 2, deletions: 1 },
       { path: "src/components/Button.tsx", kind: "modified", additions: 4, deletions: 2 },
-      { path: "README.md", kind: "modified", additions: 1, deletions: 0 },
+      { path: "src/legacy.ts", kind: "deleted", additions: 0, deletions: 5 },
+      { path: "README.md", kind: "added", additions: 1, deletions: 0 },
+      { path: "logo.png", kind: "modified", additions: 0, deletions: 0, binary: true },
     ]);
 
     expect(tree).toEqual([
@@ -53,7 +55,7 @@ describe("buildTurnDiffTree", () => {
         kind: "directory",
         name: "src",
         path: "src",
-        stat: { additions: 6, deletions: 3 },
+        stat: { additions: 6, deletions: 8 },
         children: [
           {
             kind: "directory",
@@ -65,7 +67,9 @@ describe("buildTurnDiffTree", () => {
                 kind: "file",
                 name: "Button.tsx",
                 path: "src/components/Button.tsx",
+                changeKind: "modified",
                 stat: { additions: 4, deletions: 2 },
+                statSides: "both",
               },
             ],
           },
@@ -73,15 +77,35 @@ describe("buildTurnDiffTree", () => {
             kind: "file",
             name: "index.ts",
             path: "src/index.ts",
+            changeKind: "modified",
             stat: { additions: 2, deletions: 1 },
+            statSides: "both",
+          },
+          {
+            kind: "file",
+            name: "legacy.ts",
+            path: "src/legacy.ts",
+            changeKind: "deleted",
+            stat: { additions: 0, deletions: 5 },
+            statSides: "deletions",
           },
         ],
       },
       {
         kind: "file",
+        name: "logo.png",
+        path: "logo.png",
+        changeKind: "modified",
+        stat: null,
+        statSides: "both",
+      },
+      {
+        kind: "file",
         name: "README.md",
         path: "README.md",
+        changeKind: "added",
         stat: { additions: 1, deletions: 0 },
+        statSides: "additions",
       },
     ]);
   });
@@ -124,7 +148,9 @@ describe("buildTurnDiffTree", () => {
                 kind: "file",
                 name: "index.ts",
                 path: "apps/server/src/index.ts",
+                changeKind: "modified",
                 stat: { additions: 2, deletions: 1 },
+                statSides: "both",
               },
             ],
           },
@@ -132,7 +158,9 @@ describe("buildTurnDiffTree", () => {
             kind: "file",
             name: "main.ts",
             path: "apps/server/main.ts",
+            changeKind: "modified",
             stat: { additions: 4, deletions: 0 },
+            statSides: "both",
           },
         ],
       },

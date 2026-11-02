@@ -94,3 +94,72 @@ it.effect(
       }
     }),
 );
+
+it.effect("records each changed file's kind, rename source and binary flag", () =>
+  Effect.gen(function* () {
+    const scope: OrchestrationV2CheckpointScope = {
+      id: CheckpointScopeId.make("checkpoint-scope:file-kinds"),
+      threadId: ThreadId.make("thread:file-kinds"),
+      runId: RunId.make("run:file-kinds:1"),
+      nodeId: NodeId.make("node:file-kinds:1"),
+      parentScopeId: null,
+      providerThreadId: ProviderThreadId.make("provider-thread:file-kinds"),
+      kind: "root_run",
+      ordinalWithinParent: 0,
+      advancesAppRunCount: true,
+      cwd: "/repo",
+      createdAt: DateTime.makeUnsafe("2026-11-02T00:00:00.000Z"),
+    };
+    const diff = [
+      ":000000 100644 0000000 1111111 A",
+      "new.md",
+      ":100644 000000 2222222 0000000 D",
+      "gone.txt",
+      ":100644 100644 3333333 3333333 R100",
+      "old.ts",
+      "moved.ts",
+      ":100644 100644 4444444 5555555 M",
+      "logo.png",
+      "5\t0\tnew.md",
+      "0\t3\tgone.txt",
+      "0\t0\t",
+      "old.ts",
+      "moved.ts",
+      "-\t-\tlogo.png",
+      "",
+    ].join("\0");
+    const layerTest = CheckpointService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          Layer.mock(CheckpointStore.CheckpointStore)({
+            isGitRepository: () => Effect.succeed(true),
+            captureCheckpoint: () => Effect.void,
+            hasCheckpointRef: () => Effect.succeed(true),
+            diffCheckpoints: () => Effect.succeed(diff),
+            listAuthoredPaths: () => Effect.succeed(null),
+          }),
+        ),
+      ),
+      Layer.provideMerge(NodeCrypto.layer),
+    );
+    const checkpoint = yield* Effect.gen(function* () {
+      const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+      return yield* checkpoints.capture({
+        scope,
+        ordinalWithinScope: 1,
+        runId: scope.runId!,
+        nodeId: scope.nodeId!,
+        appRunOrdinal: 1,
+        capturedAt: scope.createdAt,
+      });
+    }).pipe(Effect.provide(layerTest));
+
+    assert.deepEqual(checkpoint.files, [
+      { path: "gone.txt", kind: "deleted", additions: 0, deletions: 3 },
+      { path: "logo.png", kind: "modified", additions: 0, deletions: 0, binary: true },
+      { path: "moved.ts", previousPath: "old.ts", kind: "renamed", additions: 0, deletions: 0 },
+      { path: "new.md", kind: "added", additions: 5, deletions: 0 },
+    ]);
+  }),
+);

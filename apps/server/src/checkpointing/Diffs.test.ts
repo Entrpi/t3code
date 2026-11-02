@@ -30,11 +30,58 @@ describe("parseTurnDiffFilesFromNumstat", () => {
     ]);
   });
 
-  it("keeps binary files and empty files with zero line changes", () => {
+  it("marks binary files, whose line counts git does not report", () => {
     const numstat = ["-\t-\timage.png", "0\t0\tempty.txt", ""].join("\0");
     expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
       { path: "empty.txt", additions: 0, deletions: 0 },
-      { path: "image.png", additions: 0, deletions: 0 },
+      { path: "image.png", additions: 0, deletions: 0, binary: true },
+    ]);
+  });
+
+  it("reads each file's change kind from raw records", () => {
+    const output = [
+      ":000000 100644 0000000 1111111 A",
+      "src/added.ts",
+      ":100644 000000 2222222 0000000 D",
+      ":odd/deleted.ts",
+      ":100644 100644 3333333 4444444 M",
+      "src/edited.ts",
+      ":100644 100644 5555555 5555555 R100",
+      "src/old.ts",
+      "src/new.ts",
+      ":100644 100644 6666666 7777777 C075",
+      "src/source.ts",
+      "src/copied.ts",
+      "3\t0\tsrc/added.ts",
+      "0\t2\t:odd/deleted.ts",
+      "1\t1\tsrc/edited.ts",
+      "0\t0\t",
+      "src/old.ts",
+      "src/new.ts",
+      "2\t1\t",
+      "src/source.ts",
+      "src/copied.ts",
+      "",
+    ].join("\0");
+
+    expect(parseTurnDiffFilesFromNumstat(output)).toEqual([
+      { path: ":odd/deleted.ts", kind: "deleted", additions: 0, deletions: 2 },
+      { path: "src/added.ts", kind: "added", additions: 3, deletions: 0 },
+      {
+        path: "src/copied.ts",
+        previousPath: "src/source.ts",
+        kind: "added",
+        additions: 2,
+        deletions: 1,
+      },
+      { path: "src/edited.ts", kind: "modified", additions: 1, deletions: 1 },
+      {
+        path: "src/new.ts",
+        previousPath: "src/old.ts",
+        kind: "renamed",
+        additions: 0,
+        deletions: 0,
+      },
     ]);
   });
 

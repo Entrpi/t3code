@@ -1371,9 +1371,14 @@ export type OrchestrationV2PlanArtifact = typeof OrchestrationV2PlanArtifact.Typ
 
 export const OrchestrationV2CheckpointFileSummary = Schema.Struct({
   path: TrimmedNonEmptyString,
+  /** Set for renamed and copied files. */
+  previousPath: Schema.optional(TrimmedNonEmptyString),
+  /** `added`, `deleted`, `renamed` or `modified`; checkpoints recorded before kinds existed say `modified`. */
   kind: TrimmedNonEmptyString,
   additions: NonNegativeInt,
   deletions: NonNegativeInt,
+  /** Git reports no line counts for binary files; their counts stay 0 so older clients decode them. */
+  binary: Schema.optional(Schema.Literal(true)),
 });
 export type OrchestrationV2CheckpointFileSummary = typeof OrchestrationV2CheckpointFileSummary.Type;
 

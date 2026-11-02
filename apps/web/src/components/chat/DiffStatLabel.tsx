@@ -1,4 +1,5 @@
 import { memo } from "react";
+import type { TurnDiffStatSides } from "~/lib/turnDiffTree";
 import { cn } from "~/lib/utils";
 
 export function hasNonZeroStat(stat: { additions: number; deletions: number }): boolean {
@@ -22,14 +23,25 @@ export function formatCompactDiffCount(value: number): string {
 export const DiffStatLabel = memo(function DiffStatLabel(props: {
   additions: number;
   deletions: number;
+  /** Shows one side for a file that was only added or only deleted. */
+  sides?: TurnDiffStatSides;
   className?: string;
   layout?: "aligned" | "inline";
 }) {
-  const { additions, deletions, className, layout = "aligned" } = props;
+  const { additions, deletions, sides = "both", className, layout = "aligned" } = props;
+  const showAdditions = sides !== "deletions";
+  const showDeletions = sides !== "additions";
+  // The aligned grid keeps an empty cell, so counts stay in their columns.
+  const emptyCell = layout === "aligned" ? <span aria-hidden="true" /> : null;
   return (
     <span
       role="group"
-      aria-label={`${additions} additions, ${deletions} deletions`}
+      aria-label={[
+        showAdditions ? `${additions} additions` : null,
+        showDeletions ? `${deletions} deletions` : null,
+      ]
+        .filter(Boolean)
+        .join(", ")}
       className={cn(
         layout === "inline"
           ? "inline-flex items-center gap-1 tabular-nums align-middle"
@@ -37,12 +49,20 @@ export const DiffStatLabel = memo(function DiffStatLabel(props: {
         className,
       )}
     >
-      <span aria-hidden="true" className="font-mono text-diff-addition-foreground">
-        +{formatCompactDiffCount(additions)}
-      </span>
-      <span aria-hidden="true" className="font-mono text-diff-deletion-foreground">
-        -{formatCompactDiffCount(deletions)}
-      </span>
+      {showAdditions ? (
+        <span aria-hidden="true" className="font-mono text-diff-addition-foreground">
+          +{formatCompactDiffCount(additions)}
+        </span>
+      ) : (
+        emptyCell
+      )}
+      {showDeletions ? (
+        <span aria-hidden="true" className="font-mono text-diff-deletion-foreground">
+          -{formatCompactDiffCount(deletions)}
+        </span>
+      ) : (
+        emptyCell
+      )}
     </span>
   );
 });

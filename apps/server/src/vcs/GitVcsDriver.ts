@@ -1378,7 +1378,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           "-c",
           "diff.relative=false",
           "diff",
-          ...(input.format === "numstat" ? ["--numstat", "-z"] : ["--patch"]),
+          // Raw records give each file's status (added, deleted, renamed).
+          ...(input.format === "numstat" ? ["--raw", "--numstat", "-z"] : ["--patch"]),
           "--no-color",
           "--no-ext-diff",
           "--no-textconv",

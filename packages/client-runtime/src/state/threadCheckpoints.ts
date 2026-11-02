@@ -19,9 +19,11 @@ export interface ThreadCheckpointSummary {
   /** A prefix of the changed files when `filesTotal` is set; see `checkpointFileTotals`. */
   readonly files: ReadonlyArray<{
     readonly path: string;
+    readonly previousPath?: string | undefined;
     readonly kind: string;
     readonly additions: number;
     readonly deletions: number;
+    readonly binary?: true | undefined;
   }>;
   readonly filesTotal?: OrchestrationV2CheckpointFileTotals;
   readonly assistantMessageId: MessageId | null;
