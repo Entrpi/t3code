@@ -252,8 +252,20 @@ const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           theme={resolvedTheme}
           className="size-3.5 text-muted-foreground/70"
         />
-        <span className="flex min-w-0 font-mono text-xs text-foreground/85 group-hover:text-foreground">
+        <span
+          className={cn(
+            "flex min-w-0 font-mono text-xs",
+            node.change === "added"
+              ? "rounded-sm bg-diff-addition/12 px-1 text-diff-addition-foreground"
+              : node.change === "deleted"
+                ? "text-muted-foreground line-through decoration-diff-deletion-foreground group-hover:text-foreground/85"
+                : "text-foreground/85 group-hover:text-foreground",
+          )}
+        >
           <MiddleTruncate value={node.name} />
+          {node.change === "added" || node.change === "deleted" ? (
+            <span className="sr-only">, {node.change}</span>
+          ) : null}
         </span>
         {node.stat && (
           <span className="ml-auto shrink-0 font-mono text-3xs tabular-nums">
