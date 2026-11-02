@@ -20,7 +20,7 @@ import { resolveMediaSource } from "@t3tools/client-runtime/media-source";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/mediaPreview";
 import { formatTokens } from "@t3tools/shared/usageFormat";
-import { classifyToolActivity } from "@t3tools/shared/toolActivity";
+import { classifyToolActivity, collectToolFilePaths } from "@t3tools/shared/toolActivity";
 import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
 
 import {
@@ -399,6 +399,30 @@ export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupActio
   if (entry.itemType === "web_search") return "search";
   if ((entry.changedFiles?.length ?? 0) > 0) return "edit";
   return workLogEntryIsToolLike(entry) ? "other" : "update";
+}
+
+export function workEntryReadRawPaths(entry: WorkLogPresentationEntry): readonly string[] {
+  const fromChanged = entry.changedFiles ?? [];
+  if (fromChanged.length > 0) return fromChanged;
+  const structured = entry.structuredPayload;
+  if (structured?.type === "dynamic_tool") {
+    const structuredPaths = collectToolFilePaths({ input: structured.input });
+    if (structuredPaths.length > 0) return structuredPaths;
+  }
+  const data = entry.toolData;
+  return collectToolFilePaths(
+    data !== null && typeof data === "object" && !Array.isArray(data) ? data : undefined,
+  );
+}
+
+/** The file a row's label names first, as the provider gave it. */
+export function workEntryLabelPath(entry: WorkLogPresentationEntry): string | null {
+  if (entry.fileAction) return entry.fileAction.path;
+  if (entry.commandAction) {
+    return entry.commandAction.kind === "read" ? entry.commandAction.paths[0]! : null;
+  }
+  if (entry.command?.trim() || toolGroupAction(entry) !== "read") return null;
+  return workEntryReadRawPaths(entry)[0] ?? null;
 }
 
 export function workEntryViewedImagePath(entry: WorkLogPresentationEntry): string | null {

@@ -17,6 +17,7 @@ import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-
 import {
   resolveViewedImageAsset,
   toolGroupAction,
+  workEntryLabelPath,
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
@@ -56,13 +57,14 @@ import { cn } from "~/lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { FetchedToolOutput, V2ItemInspector } from "./V2ItemInspector";
 import { SubagentNotificationLink } from "./V2LifecycleRow";
+import { WorkRowPathLink } from "./WorkRowPathLink";
 import {
   TimelineRowCtx,
   TimelineRowActivityCtx,
   WorkGroupViewCtx,
   type TimelineWorkEntry,
 } from "./timelineRowContext";
-import { MESSAGE_HEADING_LEVEL, TimelineRowTimestamp } from "./TimelineRowParts";
+import { CutOffTooltip, MESSAGE_HEADING_LEVEL, TimelineRowTimestamp } from "./TimelineRowParts";
 import {
   failedToolIconClassName,
   toolIconAcceptsTint,
@@ -123,9 +125,11 @@ export function ThreadReadLabel({
 function FileActionLabel({
   action,
   workspaceRoot,
+  pathLink,
 }: {
   action: WorkEntryFileAction;
   workspaceRoot: string | undefined;
+  pathLink: (path: ReactNode) => ReactNode;
 }) {
   const path = formatWorkspaceRelativePath(action.path, workspaceRoot);
   const nameStart = path.lastIndexOf("/") + 1;
@@ -135,8 +139,31 @@ function FileActionLabel({
       {action.fromPath === undefined
         ? null
         : `${formatWorkspaceRelativePath(action.fromPath, workspaceRoot)} → `}
-      <span className="text-muted-foreground">{path.slice(0, nameStart)}</span>
-      <span className="text-foreground">{path.slice(nameStart)}</span>
+      {pathLink(
+        <>
+          <span className="text-muted-foreground group-hover/work-line:text-foreground/80">
+            {path.slice(0, nameStart)}
+          </span>
+          <span className="text-foreground">{path.slice(nameStart)}</span>
+        </>,
+      )}
+    </>
+  );
+}
+
+/** Splits a label around the path it names, so the path alone can be a link. */
+function LabelWithPath(props: {
+  label: string;
+  path: string;
+  pathLink: (path: ReactNode) => ReactNode;
+}) {
+  const start = props.label.indexOf(props.path);
+  if (start < 0) return props.label;
+  return (
+    <>
+      {props.label.slice(0, start)}
+      {props.pathLink(props.path)}
+      {props.label.slice(start + props.path.length)}
     </>
   );
 }
@@ -144,14 +171,22 @@ function FileActionLabel({
 function WorkEntryHeading(props: {
   className: string;
   command: string | null;
+  fullText: { text: string; code: boolean } | null;
   children: ReactNode;
 }) {
+  if (!props.command && props.fullText) {
+    return (
+      <CutOffTooltip className={props.className} {...props.fullText}>
+        {props.children}
+      </CutOffTooltip>
+    );
+  }
   const heading = <span className={props.className}>{props.children}</span>;
   if (!props.command) return heading;
   return (
     <Tooltip>
       <TooltipTrigger render={heading} />
-      <TooltipPopup side="top" variant="code">
+      <TooltipPopup side="top" variant="code" interactive>
         {props.command}
       </TooltipPopup>
     </Tooltip>
@@ -419,8 +454,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       : madeCommit
         ? "text-commit-foreground"
         : workLogEntryIsToolLike(workEntry)
-          ? "text-secondary-label"
-          : "text-foreground/80";
+          ? "text-secondary-label group-hover/work-line:text-foreground"
+          : "text-foreground/80 group-hover/work-line:text-foreground";
   const threadLabel = isReasoning ? null : threadReadLabel(previewText, threadTarget);
   const fileAction =
     displayLabel === undefined && !questionHeading ? workEntry.fileAction : undefined;
@@ -432,6 +467,24 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       (workEntry.commandEffects && formatCommandEffectsLabel(workEntry.commandEffects)))
       ? commandDisplayText(workEntry.rawCommand ?? workEntry.command ?? "")
       : null;
+  const labelPath =
+    displayLabel === undefined && !questionHeading && !isReasoning && !threadLabel
+      ? workEntryLabelPath(workEntry)
+      : null;
+  const pathLink = (children: ReactNode) =>
+    labelPath === null ? (
+      children
+    ) : (
+      <WorkRowPathLink
+        path={labelPath}
+        workspaceRoot={workspaceRoot}
+        environmentId={ctx.activeThreadEnvironmentId}
+        opens={workEntry.fileAction?.kind !== "delete"}
+        tooltip={parsedCommand === null}
+      >
+        {children}
+      </WorkRowPathLink>
+    );
   const accessiblePreview = [threadLabel?.text ?? previewText, answerPreview]
     .filter(Boolean)
     .join(": ");
@@ -479,6 +532,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             <WorkEntryHeading
               className={cn(answerPreview ? "min-w-0" : "min-w-0 flex-1", "truncate", headingClass)}
               command={parsedCommand}
+              fullText={
+                isReasoning || threadLabel || labelPath !== null
+                  ? null
+                  : { text: previewText, code: workEntry.itemType === "command_execution" }
+              }
             >
               {isReasoning && !expanded ? (
                 <ChatMarkdown
@@ -499,7 +557,17 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                   linked
                 />
               ) : fileAction ? (
-                <FileActionLabel action={fileAction} workspaceRoot={workspaceRoot} />
+                <FileActionLabel
+                  action={fileAction}
+                  workspaceRoot={workspaceRoot}
+                  pathLink={pathLink}
+                />
+              ) : labelPath !== null ? (
+                <LabelWithPath
+                  label={previewText}
+                  path={formatWorkspaceRelativePath(labelPath, workspaceRoot)}
+                  pathLink={pathLink}
+                />
               ) : (
                 previewText
               )}

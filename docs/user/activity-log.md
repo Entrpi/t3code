@@ -8,10 +8,12 @@ a file change to review its contents.
 Each changed file gets its own row that says **Created**, **Edited**, **Deleted** or **Moved**.
 Line counts appear when the turn ends. A shell command that writes to a file says **Wrote** while
 the turn runs, because the command alone does not show whether the file is new. When the turn ends,
-the row says **Created** or **Edited**. Simple shell reads and searches show as **Read** and
+the row says **Created** or **Edited**, unless the file is gone by then. Simple shell reads and searches show as **Read** and
 **Searched** rows. A command that chains several steps stays one row, such as **Chained command with
 1 file created, 2 files deleted**. Hover a row that names what a command did to see the command, or
-expand it.
+expand it. Click a file path in a row to open it in your editor. Hover the path to see its full
+path, which you can select and copy. Right-click it to reveal it in your file manager or copy its
+relative or full path.
 
 T3 Orchestrator summaries describe the actions taken, such as **Ran 2 commands and sent messages
 to 3 threads**. Repeated messages to the same destinations show both counts: **Sent 5 messages to

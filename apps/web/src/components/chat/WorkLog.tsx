@@ -50,12 +50,21 @@ type RowContent = {
   wrapLabel?: boolean;
 };
 
-function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
+function WorkLogLine({
+  icon,
+  label,
+  trailing,
+  wrapLabel,
+  interactive,
+}: RowContent & { interactive: boolean }) {
   return (
     <div
       className={cn(
-        "flex min-h-6 min-w-0 gap-1.5 text-sm leading-relaxed select-none [&_*]:select-none",
+        "group/work-line flex min-h-6 min-w-0 gap-1.5 text-sm leading-relaxed select-none [&_*]:select-none",
         wrapLabel ? "items-start" : "items-center",
+        // Drawn outside the line so the highlight never shifts it.
+        interactive &&
+          "relative isolate before:pointer-events-none before:absolute before:inset-y-0 before:-inset-x-1 before:-z-10 before:rounded-md before:transition-colors hover:before:bg-accent/60",
       )}
     >
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
@@ -69,6 +78,7 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
         <div
           className={cn(
             "min-w-0 flex-1 text-secondary-label",
+            interactive && "group-hover/work-line:text-foreground",
             !wrapLabel && "truncate [&_*]:whitespace-nowrap",
           )}
         >
@@ -102,7 +112,13 @@ export function WorkLogButton({
   const className = useRowClassName(true);
   return (
     <button {...buttonProps} type="button" className={className}>
-      <WorkLogLine icon={icon} label={label} trailing={trailing} wrapLabel={wrapLabel} />
+      <WorkLogLine
+        icon={icon}
+        label={label}
+        trailing={trailing}
+        wrapLabel={wrapLabel}
+        interactive
+      />
     </button>
   );
 }
@@ -116,10 +132,17 @@ export function WorkLogRow({
   children,
   ...rowProps
 }: RowContent & Omit<ComponentProps<"div">, "className" | "style">) {
-  const className = useRowClassName(rowProps.onClick !== undefined);
+  const interactive = rowProps.onClick !== undefined;
+  const className = useRowClassName(interactive);
   return (
     <div {...rowProps} className={className}>
-      <WorkLogLine icon={icon} label={label} trailing={trailing} wrapLabel={wrapLabel} />
+      <WorkLogLine
+        icon={icon}
+        label={label}
+        trailing={trailing}
+        wrapLabel={wrapLabel}
+        interactive={interactive}
+      />
       {children}
     </div>
   );

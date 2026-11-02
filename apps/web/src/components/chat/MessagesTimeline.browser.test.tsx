@@ -273,6 +273,79 @@ describe("MessagesTimeline work rows", () => {
     );
   });
 
+  it("gives work-row paths a copyable full-path tooltip and a path menu, and cut-off rows their full text", async () => {
+    setup();
+    const fixture = makeStreamingTimelineFixture();
+    const source = fixture.visibleTurnItems[4]!;
+    const commandRow = (id: string, input: string, position: number) => {
+      const item = {
+        ...source.item,
+        id: TurnItemId.make(id),
+        status: "completed",
+        title: null,
+        type: "command_execution",
+        input,
+        exitCode: 0,
+      } as OrchestrationV2TurnItem;
+      return { ...source, position, sourceItemId: item.id, item };
+    };
+    await using screen = await renderTimeline(
+      deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: [
+          commandRow("read", "cat src/app.ts", 0),
+          commandRow("touch", "touch notes.md", 1),
+          commandRow("short", "pwd", 2),
+          commandRow("long", `node scripts/report.js --input ${"data/".repeat(60)}out.json`, 3),
+        ],
+        optimisticMessages: [],
+      }),
+      { workspaceRoot: "/repo" },
+    );
+    await expand(screen, /^Worked for/, /^Inspected 1 file, created 1 file/);
+    const popup = () => document.querySelector<HTMLElement>('[data-slot="tooltip-popup"]');
+    const positioner = () => popup()?.closest<HTMLElement>('[data-slot="tooltip-positioner"]');
+
+    const pathLink = (text: string) =>
+      vi.waitFor(() => {
+        const link = [...document.querySelectorAll<HTMLElement>("[data-work-row-path]")].find(
+          (element) => element.textContent === text,
+        );
+        if (!link) throw new Error(`Missing path link: ${text}`);
+        return link;
+      });
+    await userEvent.hover(await pathLink("repo/src/app.ts"));
+    await vi.waitFor(() => expect(popup()?.textContent).toBe("/repo/src/app.ts"));
+    expect(getComputedStyle(positioner()!).pointerEvents).not.toBe("none");
+    expect(getComputedStyle(popup()!).userSelect).toBe("text");
+    await userEvent.hover(popup()!, { force: true });
+    expect(popup()?.textContent).toBe("/repo/src/app.ts");
+
+    await userEvent.click(await pathLink("repo/src/app.ts"), { button: "right" });
+    const menuItems = await vi.waitFor(() => {
+      const items = [...document.querySelectorAll('[role="menuitem"]')].map(
+        (item) => item.textContent,
+      );
+      expect(items).toContain("Copy full path");
+      return items;
+    });
+    expect(menuItems).toContain("Copy relative path");
+    expect(screen.button(/^Inspected 1 file, created 1 file/).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+
+    await userEvent.hover(await pathLink("repo/notes.md"));
+    await vi.waitFor(() => expect(popup()?.textContent).toBe("touch notes.md"));
+    expect(document.querySelectorAll('[data-slot="tooltip-popup"]')).toHaveLength(1);
+
+    await userEvent.hover(await vi.waitFor(() => screen.button(/^node scripts\/report\.js/)));
+    await vi.waitFor(() => expect(popup()?.textContent).toMatch(/data\/out\.json$/));
+    expect(getComputedStyle(popup()!).userSelect).toBe("text");
+    await userEvent.hover(await vi.waitFor(() => screen.button(/^pwd$/)));
+    await vi.waitFor(() => expect(popup()).toBeNull());
+  });
+
   it("keeps the worked-for heading in place when expanded at the bottom", async () => {
     const props = baseProps();
     const runId = RunId.make("completed-run");
