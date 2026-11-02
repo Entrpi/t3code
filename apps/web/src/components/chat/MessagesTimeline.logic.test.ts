@@ -841,7 +841,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRows[1]?.showAssistantCopyButton).toBe(true);
   });
 
-  it("projects assistant diffs and rewinds the first visible run to thread start after a rewind", () => {
+  it("projects assistant diffs and commits, and rewinds the first visible run to thread start after a rewind", () => {
     const assistantTurnDiffSummary = {
       runId: "turn-1" as never,
       completedAt: "2026-01-01T00:00:30Z",
@@ -867,6 +867,22 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:00Z",
             updatedAt: "2026-01-01T00:00:00Z",
             streaming: false,
+          },
+        },
+        {
+          id: "commit-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:10Z",
+          entry: {
+            id: "commit",
+            createdAt: "2026-01-01T00:00:10Z",
+            runId: "turn-1" as never,
+            label: "Ran command",
+            command: "git add . && git commit -m test && git commit --amend --no-edit",
+            commandEffects: { files: [], commits: 2, chained: true },
+            tone: "tool",
+            itemType: "command_execution",
+            toolLifecycleStatus: "completed",
           },
         },
         {
@@ -902,6 +918,7 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(userRow?.revertTurnCount).toBe(0);
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
+    expect(assistantRow?.assistantCommitCount).toBe(2);
   });
 
   it("folds the first assistant message and settled work before the terminal response", () => {

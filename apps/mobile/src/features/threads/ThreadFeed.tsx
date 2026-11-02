@@ -1632,6 +1632,11 @@ function RunFoldButton({
           className="shrink font-t3-medium text-sm tabular-nums text-foreground-muted"
         >
           {entry.label}
+          {entry.commitCount ? (
+            <Text className="text-adaptive-violet-600-400">
+              {` · ${entry.commitCount} ${entry.commitCount === 1 ? "commit" : "commits"}`}
+            </Text>
+          ) : null}
           {error ? ` · ${error}` : ""}
         </Text>
         <ThreadDisclosureChevron
@@ -1792,6 +1797,7 @@ function renderFeedEntry(
         steps={entry.steps}
         iconSubtleColor={iconSubtleColor}
         summary={entry.summary}
+        summaryParts={entry.summaryParts}
         summaryKind={entry.summaryKind}
         themeAppearance={props.themeAppearance}
         toolSurface={entry.toolSurface}

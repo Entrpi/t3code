@@ -5,7 +5,11 @@ import {
   type ReadLineRange,
 } from "@t3tools/shared/toolActivity";
 
-import { classifyShellCommand } from "./shellCommandActions.ts";
+import {
+  classifyShellCommand,
+  type ShellCommandAction,
+  type ShellCommandClassification,
+} from "./shellCommandActions.ts";
 
 /** `write` is a shell redirect, which cannot tell a new file from an edited one. */
 export type FileActionKind = "create" | "edit" | "delete" | "move" | "write";
@@ -28,6 +32,15 @@ export type WorkEntryCommandAction =
       readonly lines?: ReadLineRange;
     }
   | { readonly kind: "search"; readonly query?: string; readonly path?: string };
+
+/** A command that does more than one read, search or file action. */
+export interface WorkEntryCommandEffects {
+  /** In command order. */
+  readonly files: ReadonlyArray<WorkEntryFileAction>;
+  readonly commits: number;
+  /** More than one command, joined by `&&`, `;` or a pipe. */
+  readonly chained: boolean;
+}
 
 type FileChangeItem = Extract<OrchestrationV2TurnItem, { readonly type: "file_change" }>;
 type CommandItem = Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }>;
@@ -61,10 +74,21 @@ const VERBS: Record<FileActionKind, string> = {
   write: "Wrote",
 };
 
+const EFFECT_ORDER: ReadonlyArray<FileActionKind> = ["edit", "write", "create", "move", "delete"];
+const EFFECT_NOUNS: Record<FileActionKind, readonly [string, string]> = {
+  edit: ["file edit", "file edits"],
+  write: ["file written", "files written"],
+  create: ["file created", "files created"],
+  move: ["file moved", "files moved"],
+  delete: ["file deleted", "files deleted"],
+};
+
+const classificationCache = new WeakMap<CommandItem, ShellCommandClassification | null>();
 const commandActionCache = new WeakMap<
   CommandItem,
   WorkEntryCommandAction | WorkEntryFileAction | null
 >();
+const commandEffectsCache = new WeakMap<CommandItem, WorkEntryCommandEffects | null>();
 const fileActionsCache = new WeakMap<
   OrchestrationV2TurnItem,
   ReadonlyArray<{ readonly id: string; readonly action: WorkEntryFileAction }>
@@ -85,18 +109,63 @@ export function commandWorkAction(
 ): WorkEntryCommandAction | WorkEntryFileAction | null {
   const cached = commandActionCache.get(item);
   if (cached !== undefined) return cached;
-  const action =
-    item.status === "completed" && (item.exitCode ?? 0) === 0
-      ? commandActionFromText(item.input)
-      : null;
+  const classification = settledClassification(item);
+  const action = classification === null ? null : commandActionFromClassification(classification);
   commandActionCache.set(item, action);
   return action;
 }
 
-function commandActionFromText(
-  command: string,
-): WorkEntryCommandAction | WorkEntryFileAction | null {
-  const { actions, other } = classifyShellCommand(command);
+/**
+ * The file actions and commits of a finished, successful command that
+ * `commandWorkAction` cannot name as one action. Exit 0 is the only proof a
+ * commit landed; a chain that ignores a failed commit still counts it.
+ */
+export function commandWorkEffects(item: CommandItem): WorkEntryCommandEffects | null {
+  const cached = commandEffectsCache.get(item);
+  if (cached !== undefined) return cached;
+  const classification = settledClassification(item);
+  let effects: WorkEntryCommandEffects | null = null;
+  if (classification !== null && commandWorkAction(item) === null) {
+    const files = classification.actions.flatMap((action) => {
+      const file = shellFileAction(action);
+      return file === null ? [] : [file];
+    });
+    const commits = classification.actions.filter((action) => action.kind === "commit").length;
+    if (files.length > 0 || commits > 0) {
+      effects = { files, commits, chained: classification.segments > 1 };
+    }
+  }
+  commandEffectsCache.set(item, effects);
+  return effects;
+}
+
+function settledClassification(item: CommandItem): ShellCommandClassification | null {
+  if (item.status !== "completed" || (item.exitCode ?? 0) !== 0) return null;
+  const cached = classificationCache.get(item);
+  if (cached !== undefined) return cached;
+  const classification = classifyShellCommand(item.input);
+  classificationCache.set(item, classification);
+  return classification;
+}
+
+function shellFileAction(action: ShellCommandAction): WorkEntryFileAction | null {
+  switch (action.kind) {
+    case "create":
+    case "delete":
+      return { kind: action.kind, path: action.path, exact: true };
+    case "edit":
+      return { kind: "write", path: action.path, exact: false };
+    case "move":
+      return { kind: "move", path: action.toPath, fromPath: action.path, exact: true };
+    default:
+      return null;
+  }
+}
+
+function commandActionFromClassification({
+  actions,
+  other,
+}: ShellCommandClassification): WorkEntryCommandAction | WorkEntryFileAction | null {
   const [first] = actions;
   if (other || first === undefined) return null;
   const reads = actions.filter((action) => action.kind === "read");
@@ -106,23 +175,37 @@ function commandActionFromText(
     return lines === undefined ? { kind: "read", paths } : { kind: "read", paths, lines };
   }
   if (actions.length !== 1) return null;
-  switch (first.kind) {
-    case "search": {
-      const { kind: _kind, ...search } = first;
-      return formatSearchToolLabel({ input: search }) === undefined
-        ? null
-        : { kind: "search", ...search };
-    }
-    case "create":
-    case "delete":
-      return { kind: first.kind, path: first.path, exact: true };
-    case "edit":
-      return { kind: "write", path: first.path, exact: false };
-    case "move":
-      return { kind: "move", path: first.toPath, fromPath: first.path, exact: true };
-    default:
-      return null;
+  if (first.kind !== "search") return shellFileAction(first);
+  const { kind: _kind, ...search } = first;
+  return formatSearchToolLabel({ input: search }) === undefined
+    ? null
+    : { kind: "search", ...search };
+}
+
+/**
+ * "Chained command with 1 file edit, 2 files deleted and 1 commit"; one command
+ * naming several files of one kind reads "Deleted 2 files". Null keeps the command.
+ */
+export function formatCommandEffectsLabel(effects: WorkEntryCommandEffects): string | null {
+  if (effects.files.length === 0) return null;
+  const counts = EFFECT_ORDER.flatMap((kind) => {
+    const count = new Set(
+      effects.files.filter((file) => file.kind === kind).map((file) => file.path),
+    ).size;
+    return count === 0 ? [] : [{ kind, count }];
+  });
+  if (!effects.chained && counts.length === 1 && effects.commits === 0) {
+    const { kind, count } = counts[0]!;
+    return `${VERBS[kind]} ${count} ${count === 1 ? "file" : "files"}`;
   }
+  const files = counts
+    .map(({ kind, count }) => `${count} ${EFFECT_NOUNS[kind][count === 1 ? 0 : 1]}`)
+    .join(", ");
+  const commits =
+    effects.commits === 0
+      ? ""
+      : ` and ${effects.commits} ${effects.commits === 1 ? "commit" : "commits"}`;
+  return `${effects.chained ? "Chained command" : "Command"} with ${files}${commits}`;
 }
 
 /**
@@ -140,9 +223,34 @@ export function workItemFileActions(
   return actions;
 }
 
+/** A chained command stays one row; each of its files settles under its own id. */
 function commandFileActions(item: CommandItem) {
   const action = commandWorkAction(item);
-  return action !== null && isFileAction(action) ? [{ id: item.id, action }] : [];
+  if (action !== null) return isFileAction(action) ? [{ id: item.id, action }] : [];
+  return (commandWorkEffects(item)?.files ?? []).map((file, index) => ({
+    id: commandEffectFileId(item.id, index),
+    action: file,
+  }));
+}
+
+function commandEffectFileId(itemId: string, index: number): string {
+  return `${itemId}:${index}`;
+}
+
+/** The effects with each file's settled kind and counts. */
+export function settleCommandEffects(
+  itemId: string,
+  effects: WorkEntryCommandEffects,
+  settled: ReadonlyMap<string, WorkEntryFileAction>,
+): WorkEntryCommandEffects {
+  let changed = false;
+  const files = effects.files.map((file, index) => {
+    const next = settled.get(commandEffectFileId(itemId, index));
+    if (next === undefined) return file;
+    changed = true;
+    return next;
+  });
+  return changed ? { ...effects, files } : effects;
 }
 
 function fileChangeActions(item: FileChangeItem) {

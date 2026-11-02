@@ -33,10 +33,12 @@ import {
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
   commandWorkAction,
+  commandWorkEffects,
   formatFileActionLabel,
   isFileAction,
   workItemFileActions,
   type WorkEntryCommandAction,
+  type WorkEntryCommandEffects,
   type WorkEntryFileAction,
 } from "@t3tools/client-runtime/work-log/file-actions";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
@@ -86,6 +88,7 @@ export interface WorkLogEntry {
   readonly changedFiles?: ReadonlyArray<string>;
   readonly fileAction?: WorkEntryFileAction;
   readonly commandAction?: WorkEntryCommandAction;
+  readonly commandEffects?: WorkEntryCommandEffects;
   readonly tone: "thinking" | "tool" | "info" | "error";
   readonly toolTitle?: string;
   readonly toolCallId?: string;
@@ -443,6 +446,7 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
       };
     case "command_execution": {
       const action = commandWorkAction(item);
+      const effects = commandWorkEffects(item);
       return {
         ...common,
         label: title ?? "Ran command",
@@ -451,7 +455,9 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         toolTitle: title ?? "Command",
         toolData: item,
         ...(action === null
-          ? {}
+          ? effects === null
+            ? {}
+            : { commandEffects: effects }
           : isFileAction(action)
             ? { fileAction: action }
             : { commandAction: action }),

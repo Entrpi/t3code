@@ -9,12 +9,16 @@ import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRu
 import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
 import {
   commandWorkAction,
+  commandWorkEffects,
   formatCommandActionLabel,
+  formatCommandEffectsLabel,
   formatFileActionLabel,
   isFileAction,
   readTitleWithPath,
+  settleCommandEffects,
   settleFileActions,
   workItemFileActions,
+  type WorkEntryCommandEffects,
   type WorkEntryFileAction,
 } from "@t3tools/client-runtime/work-log/file-actions";
 import {
@@ -40,6 +44,7 @@ import {
   workGroupExpanded,
   type ToolGroupSummaryKind,
   type WorkLogDensity,
+  type WorkLogSummaryPart,
   type WorkLogPresentationEntry,
   type WorkLogToolLifecycleStatus,
 } from "@t3tools/client-runtime/work-log/presentation";
@@ -227,6 +232,8 @@ type ThreadFeedEntryContent =
       readonly steps?: number;
       readonly expanded: boolean;
       readonly summary: string;
+      /** Present when some part of a settled summary is highlighted; joins to `summary`. */
+      readonly summaryParts?: ReadonlyArray<WorkLogSummaryPart>;
       readonly summaryKind: ToolGroupSummaryKind;
       readonly toolSurface?: WorkLogPresentationEntry["toolSurface"];
       readonly toolIcon?: WorkLogPresentationEntry["toolIcon"];
@@ -243,6 +250,7 @@ type ThreadFeedEntryContent =
       readonly createdAt: string;
       readonly runId: RunId;
       readonly label: string;
+      readonly commitCount?: number;
       readonly expanded: boolean;
     }
   | {
@@ -282,6 +290,8 @@ export function workEntryRowLabel(
   if (entry.commandAction) {
     return compactWorkEntryText(formatCommandActionLabel(entry.commandAction, formatPath));
   }
+  const effectsLabel = entry.commandEffects && formatCommandEffectsLabel(entry.commandEffects);
+  if (effectsLabel) return effectsLabel;
   if (entry.command?.trim()) return compactWorkEntryText(commandDisplayText(entry.command));
   const action = toolGroupAction(entry);
   const isToolRead = action === "read" && entry.itemType === "dynamic_tool";
@@ -755,6 +765,7 @@ function toWorkLogEntry(
       return { ...common, ...(item.text ? { detail: item.text } : {}) };
     case "command_execution": {
       const action = commandWorkAction(item);
+      const effects = commandWorkEffects(item);
       return {
         ...common,
         command: item.input,
@@ -762,7 +773,9 @@ function toWorkLogEntry(
         toolTitle: title ?? "Command",
         toolData: item,
         ...(action === null
-          ? {}
+          ? effects === null
+            ? {}
+            : { commandEffects: effects }
           : isFileAction(action)
             ? { fileAction: action }
             : { commandAction: action }),
@@ -1072,6 +1085,7 @@ interface ThreadFeedRunFold {
   readonly createdAt: string;
   readonly hiddenEntryIds: ReadonlySet<string>;
   readonly label: string;
+  readonly commitCount?: number;
 }
 
 export function failedFeedRunIds(
@@ -1268,8 +1282,19 @@ function deriveThreadFeedRunFolds(
           )
         : [],
     );
+    const commitCount = group.entries.reduce(
+      (count, entry) =>
+        entry.type === "activity-group"
+          ? entry.activities.reduce(
+              (sum, activity) => sum + (activity.workEntry.commandEffects?.commits ?? 0),
+              count,
+            )
+          : count,
+      0,
+    );
     foldsByAnchorId.set(firstHiddenEntry.id, {
       ...(deferredWorkItemIds.length > 0 ? { deferredWorkItemIds } : {}),
+      ...(commitCount > 0 ? { commitCount } : {}),
       runId,
       createdAt: firstHiddenEntry.createdAt,
       hiddenEntryIds,
@@ -1519,6 +1544,7 @@ export function deriveThreadFeedPresentation(
         row.runId !== fold.runId ||
         row.createdAt !== fold.createdAt ||
         row.label !== fold.label ||
+        row.commitCount !== fold.commitCount ||
         row.expanded !== expanded ||
         row.deferredWorkItemIds?.join("|") !== fold.deferredWorkItemIds?.join("|")
       ) {
@@ -1529,6 +1555,7 @@ export function deriveThreadFeedPresentation(
           createdAt: fold.createdAt,
           runId: fold.runId,
           label: fold.label,
+          ...(fold.commitCount ? { commitCount: fold.commitCount } : {}),
           expanded,
         };
         runFoldRowsCache.set(entry, row);
@@ -1889,7 +1916,10 @@ function appendToolGroupRows(
           ...singleActivity,
           live: shimmer,
           groupStandIn:
-            !live && (singleActivity.workEntry.fileAction || singleActivity.workEntry.commandAction)
+            !live &&
+            (singleActivity.workEntry.fileAction ||
+              singleActivity.workEntry.commandAction ||
+              singleActivity.workEntry.commandEffects)
               ? { groupId }
               : { groupId, label: summary },
         },
@@ -1935,6 +1965,10 @@ function appendToolGroupRows(
       : {}),
     expanded,
     summary,
+    ...(summary === groupSummary.summary &&
+    groupSummary.parts.some((part) => part.tone !== undefined)
+      ? { summaryParts: groupSummary.parts }
+      : {}),
     summaryKind: toolGroupSummaryKind(
       (live ? [latestActivity] : activities).map((activity) => activity.workEntry),
     ),
@@ -2079,11 +2113,45 @@ const settledActivityEntries = new WeakMap<
   { readonly action: WorkEntryFileAction; readonly entry: RawThreadFeedEntry }
 >();
 
+const settledEffectEntries = new WeakMap<
+  RawThreadFeedEntry,
+  { readonly effects: WorkEntryCommandEffects; readonly entry: RawThreadFeedEntry }
+>();
+
+function withSettledCommandEffects(
+  entry: Extract<RawThreadFeedEntry, { readonly type: "activity" }>,
+  effects: WorkEntryCommandEffects,
+  settled: ReadonlyMap<string, WorkEntryFileAction>,
+): RawThreadFeedEntry {
+  const next = settleCommandEffects(entry.activity.workEntry.id, effects, settled);
+  if (next === effects) return entry;
+  const cached = settledEffectEntries.get(entry);
+  if (
+    cached?.effects.files.every(
+      (file, index) =>
+        file.kind === next.files[index]?.kind && file.additions === next.files[index]?.additions,
+    )
+  ) {
+    return cached.entry;
+  }
+  const settledEntry: RawThreadFeedEntry = {
+    ...entry,
+    activity: {
+      ...entry.activity,
+      workEntry: { ...entry.activity.workEntry, commandEffects: next },
+    },
+  };
+  settledEffectEntries.set(entry, { effects: next, entry: settledEntry });
+  return settledEntry;
+}
+
 /** File rows of runs with a ready checkpoint take its kinds and counts; live rows keep theirs. */
 function withSettledFileAction(
   entry: Extract<RawThreadFeedEntry, { readonly type: "activity" }>,
   settled: ReadonlyMap<string, WorkEntryFileAction>,
 ): RawThreadFeedEntry {
+  const { commandEffects } = entry.activity.workEntry;
+  if (commandEffects) return withSettledCommandEffects(entry, commandEffects, settled);
   const action = settled.get(entry.activity.workEntry.id);
   if (action === undefined) return entry;
   const cached = settledActivityEntries.get(entry);

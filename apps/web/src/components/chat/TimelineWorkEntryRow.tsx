@@ -26,11 +26,13 @@ import {
 import { claudeSkillInvocation } from "@t3tools/shared/toolActivity";
 import {
   fileActionVerb,
+  formatCommandEffectsLabel,
   type WorkEntryFileAction,
 } from "@t3tools/client-runtime/work-log/file-actions";
+import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-label";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { DiffStatLabel } from "./DiffStatLabel";
-import { memo, use, useState, type KeyboardEvent } from "react";
+import { memo, use, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   workEntryDisplayIndicatesToolFailure,
   workEntrySignalsSevereFailure,
@@ -40,6 +42,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import { ChevronRightIcon, CircleAlertIcon, XIcon, RotateCcwIcon } from "lucide-react";
 import { Button, InlineButton } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAssetUrls } from "../../assets/assetUrls";
 import { useThreadShell } from "../../state/entities";
 import {
@@ -135,6 +138,23 @@ function FileActionLabel({
       <span className="text-muted-foreground">{path.slice(0, nameStart)}</span>
       <span className="text-foreground">{path.slice(nameStart)}</span>
     </>
+  );
+}
+
+function WorkEntryHeading(props: {
+  className: string;
+  command: string | null;
+  children: ReactNode;
+}) {
+  const heading = <span className={props.className}>{props.children}</span>;
+  if (!props.command) return heading;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={heading} />
+      <TooltipPopup side="top" variant="code">
+        {props.command}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -306,6 +326,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     showWarningIndicator || showDestructiveRowStyle
       ? undefined
       : (workEntry.toolIcon ?? workEntry.toolSource?.icon);
+  const madeCommit =
+    !showWarningIndicator && !showFailedIndicator && (workEntry.commandEffects?.commits ?? 0) > 0;
   const isReasoning = workEntry.itemType === "reasoning";
   const questionHeading = workEntry.questionAnswer
     ? getQuestionTextPreview(workEntry.questionAnswer)
@@ -384,20 +406,32 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         ? "text-destructive"
         : showFailedIndicator
           ? failedToolIconClassName
-          : workEntry.tone === "tool"
-            ? "text-icon-muted"
-            : iconConfig.className,
+          : madeCommit
+            ? "text-commit-foreground"
+            : workEntry.tone === "tool"
+              ? "text-icon-muted"
+              : iconConfig.className,
   );
   const headingClass = showWarningIndicator
     ? "font-medium text-warning"
     : showDestructiveRowStyle
       ? "font-medium text-destructive"
-      : workLogEntryIsToolLike(workEntry)
-        ? "text-secondary-label"
-        : "text-foreground/80";
+      : madeCommit
+        ? "text-commit-foreground"
+        : workLogEntryIsToolLike(workEntry)
+          ? "text-secondary-label"
+          : "text-foreground/80";
   const threadLabel = isReasoning ? null : threadReadLabel(previewText, threadTarget);
   const fileAction =
     displayLabel === undefined && !questionHeading ? workEntry.fileAction : undefined;
+  // A row that names what a command did keeps the command one hover away.
+  const parsedCommand =
+    displayLabel === undefined &&
+    workEntry.itemType === "command_execution" &&
+    (workEntry.fileAction ||
+      (workEntry.commandEffects && formatCommandEffectsLabel(workEntry.commandEffects)))
+      ? commandDisplayText(workEntry.rawCommand ?? workEntry.command ?? "")
+      : null;
   const accessiblePreview = [threadLabel?.text ?? previewText, answerPreview]
     .filter(Boolean)
     .join(": ");
@@ -435,15 +469,16 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             icon={entryToolIcon}
             fallbackName={entryIconName}
             className="block size-4 shrink-0 stroke-2"
-            muted
+            muted={!madeCommit}
           />
         </span>
       }
       label={
         <div className="min-w-0 flex-1 overflow-hidden">
           <p className="flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed">
-            <span
+            <WorkEntryHeading
               className={cn(answerPreview ? "min-w-0" : "min-w-0 flex-1", "truncate", headingClass)}
+              command={parsedCommand}
             >
               {isReasoning && !expanded ? (
                 <ChatMarkdown
@@ -468,7 +503,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               ) : (
                 previewText
               )}
-            </span>
+            </WorkEntryHeading>
             {answerPreview ? (
               <span
                 className={cn(

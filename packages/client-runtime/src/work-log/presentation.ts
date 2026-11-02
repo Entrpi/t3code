@@ -27,6 +27,7 @@ import {
   fileActionVerb,
   type FileActionKind,
   type WorkEntryCommandAction,
+  type WorkEntryCommandEffects,
   type WorkEntryFileAction,
 } from "@t3tools/client-runtime/work-log/file-actions";
 
@@ -99,6 +100,7 @@ export interface WorkLogPresentationEntry {
   readonly changedFiles?: ReadonlyArray<string>;
   readonly fileAction?: WorkEntryFileAction;
   readonly commandAction?: WorkEntryCommandAction;
+  readonly commandEffects?: WorkEntryCommandEffects;
   readonly toolTitle?: string;
   readonly toolData?: unknown;
   readonly requestKind?: string;
@@ -147,7 +149,20 @@ export function workGroupExpanded(
   return groupId.endsWith(LIVE_WORK_GROUP_SUFFIX) ? !toggled : toggled;
 }
 
-type SummaryKey = ToolGroupAction | T3McpToolSummaryAction | `file-${FileActionKind}` | "plan";
+type SummaryKey =
+  | ToolGroupAction
+  | T3McpToolSummaryAction
+  | `file-${FileActionKind}`
+  | "plan"
+  | "commit";
+
+/** File changes, deletions and commits stand out among reads and commands. */
+export type WorkLogSummaryTone = "file-change" | "file-delete" | "commit";
+
+export interface WorkLogSummaryPart {
+  readonly text: string;
+  readonly tone?: WorkLogSummaryTone;
+}
 
 export type ToolGroupSummaryKind =
   | "pull-request"
@@ -500,25 +515,44 @@ function summaryAction(entry: WorkLogPresentationEntry): ToolGroupAction {
   return toolGroupAction(entry);
 }
 
-function summaryKey(entry: WorkLogPresentationEntry, action: ToolGroupAction): SummaryKey {
-  if (entry.fileAction) return `file-${entry.fileAction.kind}`;
-  if (entry.itemType === "todo_list") return "plan";
-  return action;
+/** A chained command counts each file it changed and each commit, and is not a command. */
+function summaryContributions(
+  entry: WorkLogPresentationEntry,
+  action: ToolGroupAction,
+): ReadonlyArray<{ readonly key: SummaryKey; readonly path?: string; readonly commits?: number }> {
+  if (entry.fileAction)
+    return [{ key: `file-${entry.fileAction.kind}`, path: entry.fileAction.path }];
+  const effects = entry.commandEffects;
+  if (effects) {
+    return [
+      ...effects.files.map((file) => ({ key: `file-${file.kind}` as const, path: file.path })),
+      ...(effects.commits > 0 ? [{ key: "commit" as const, commits: effects.commits }] : []),
+    ];
+  }
+  if (entry.itemType === "todo_list") return [{ key: "plan" }];
+  return [{ key: action }];
 }
 
-function summaryLabel(
-  key: SummaryKey,
-  action: ToolGroupAction,
-  entries: ReadonlyArray<WorkLogPresentationEntry>,
-  density: WorkLogDensity,
-): string {
+interface SummaryGroup {
+  readonly action: ToolGroupAction;
+  readonly t3Action: T3McpToolSummaryAction | null;
+  readonly entries: WorkLogPresentationEntry[];
+  readonly paths: Set<string>;
+  commits: number;
+}
+
+function summaryLabel(key: SummaryKey, group: SummaryGroup, density: WorkLogDensity): string {
+  const { action, entries } = group;
   if (key === "plan") {
     return entries.length === 1 ? "Updated the plan" : `Updated the plan ${entries.length} times`;
   }
-  const fileKind = entries[0]?.fileAction?.kind;
-  if (key.startsWith("file-") && fileKind !== undefined) {
-    const count = new Set(entries.map((entry) => entry.fileAction?.path)).size;
-    return `${fileActionVerb(fileKind)} ${count} ${count === 1 ? "file" : "files"}`;
+  if (key === "commit") {
+    return `Made ${group.commits} ${group.commits === 1 ? "commit" : "commits"}`;
+  }
+  if (key.startsWith("file-")) {
+    const count = group.paths.size;
+    const verb = fileActionVerb(key.slice("file-".length) as FileActionKind);
+    return `${verb} ${count} ${count === 1 ? "file" : "files"}`;
   }
   const count = toolGroupActionCount(action, entries);
   return action === "read" && density === "compact"
@@ -541,8 +575,15 @@ function t3ToolSummaryCall(entry: WorkLogPresentationEntry): T3ToolSummaryCall {
   };
 }
 
+function summaryTone(key: SummaryKey): WorkLogSummaryTone | undefined {
+  if (key === "commit") return "commit";
+  if (key === "file-delete") return "file-delete";
+  return key.startsWith("file-") ? "file-change" : undefined;
+}
+
 function summaryActionPriority(action: SummaryKey): number {
   switch (action) {
+    case "commit":
     case "command":
     case "edit":
     case "file-create":
@@ -589,57 +630,84 @@ function summaryActionPriority(action: SummaryKey): number {
   }
 }
 
+interface SummaryFacts {
+  readonly t3Action: ReturnType<typeof resolveT3McpSummaryAction>;
+  readonly action: ToolGroupAction;
+  readonly contributions: ReadonlyArray<{
+    readonly key: SummaryKey;
+    readonly path?: string;
+    readonly commits?: number;
+  }>;
+  readonly failed: boolean;
+  readonly sourced: boolean;
+}
+
+// Groups are re-summarized on every feed update; their entries keep their identity.
+const summaryFactsCache = new WeakMap<WorkLogPresentationEntry, SummaryFacts>();
+
+function summaryFacts(entry: WorkLogPresentationEntry): SummaryFacts {
+  const cached = summaryFactsCache.get(entry);
+  if (cached !== undefined) return cached;
+  const toolName = workEntryToolName(entry);
+  const t3Action = resolveT3McpSummaryAction(toolName, t3ToolSummaryCall(entry).input);
+  const action = summaryAction(entry);
+  const facts = {
+    t3Action,
+    action,
+    contributions: t3Action === null ? summaryContributions(entry, action) : [{ key: t3Action }],
+    failed: workEntryDisplayIndicatesToolFailure(entry),
+    sourced: entry.toolSource !== undefined && resolveT3McpToolDefinition(toolName) === null,
+  };
+  summaryFactsCache.set(entry, facts);
+  return facts;
+}
+
 export function summarizeToolGroup(
   entries: ReadonlyArray<WorkLogPresentationEntry>,
   density: WorkLogDensity = "standard",
 ): {
   summary: string;
+  /** The summary in pieces, so clients highlight the same words. */
+  parts: ReadonlyArray<WorkLogSummaryPart>;
   hasFailure: boolean;
   /** Tool rows in the group; thoughts are not steps. */
   steps: number;
 } {
   const toolEntries = entries.filter((entry) => entry.itemType !== "reasoning");
   if (entries.length > 0 && toolEntries.length === 0) {
-    return {
-      summary: entries.length === 1 ? "Thought" : `Thought (×${entries.length})`,
-      hasFailure: false,
-      steps: 0,
-    };
+    const summary = entries.length === 1 ? "Thought" : `Thought (×${entries.length})`;
+    return { summary, parts: [{ text: summary }], hasFailure: false, steps: 0 };
   }
   entries = toolEntries;
-  const groups = new Map<
-    SummaryKey,
-    {
-      action: ToolGroupAction;
-      t3Action: T3McpToolSummaryAction | null;
-      entries: WorkLogPresentationEntry[];
-    }
-  >();
+  const groups = new Map<SummaryKey, SummaryGroup>();
   const sources = new Map<string, ToolActivitySource>();
   for (const entry of entries) {
-    const t3Action = resolveT3McpSummaryAction(
-      workEntryToolName(entry),
-      t3ToolSummaryCall(entry).input,
-    );
+    const { t3Action, action, contributions } = summaryFacts(entry);
     if (entry.toolSource && t3Action === null) {
       sources.set(entry.toolSource.key, entry.toolSource);
       continue;
     }
-    const action = summaryAction(entry);
-    const key = t3Action ?? summaryKey(entry, action);
-    const group = groups.get(key);
-    if (group) group.entries.push(entry);
-    else groups.set(key, { action, t3Action, entries: [entry] });
+    for (const { key, path, commits } of contributions) {
+      let group = groups.get(key);
+      if (group === undefined) {
+        group = { action, t3Action, entries: [], paths: new Set(), commits: 0 };
+        groups.set(key, group);
+      }
+      if (group.entries.at(-1) !== entry) group.entries.push(entry);
+      if (path !== undefined) group.paths.add(path);
+      group.commits += commits ?? 0;
+    }
   }
   const summaries = [...groups].map(([key, group], index) => ({
     index,
-    count: group.entries.length,
+    entries: group.entries,
     priority: summaryActionPriority(key),
+    tone: summaryTone(key),
     ...(group.t3Action
       ? summarizeT3ToolCalls(group.t3Action, group.entries.map(t3ToolSummaryCall))
       : {
-          label: summaryLabel(key, group.action, group.entries, density),
-          failedCount: group.entries.filter(workEntryDisplayIndicatesToolFailure).length,
+          label: summaryLabel(key, group, density),
+          failedCount: group.entries.filter((entry) => summaryFacts(entry).failed).length,
         }),
   }));
   const selected =
@@ -651,7 +719,9 @@ export function summarizeToolGroup(
           .sort((a, b) => a.priority - b.priority || a.index - b.index)
           .slice(0, 2)
           .sort((a, b) => a.index - b.index);
-  const labels = selected.map(({ label }) => label);
+  const labels: WorkLogSummaryPart[] = selected.map(({ label, tone }) =>
+    tone === undefined ? { text: label } : { text: label, tone },
+  );
   if (sources.size > 0) {
     const sourceValues = [...sources.values()];
     const sourceNames = [...new Set(sourceValues.map((source) => source.name))];
@@ -662,29 +732,32 @@ export function summarizeToolGroup(
           ? sourceNames.join(" and ")
           : `${sourceNames.slice(0, -1).join(", ")}, and ${sourceNames.at(-1)}`;
     const allIntegrations = sourceValues.every((source) => source.kind === "integration");
-    labels.unshift(
-      `Used ${formattedNames}${allIntegrations ? ` ${sourceNames.length === 1 ? "integration" : "integrations"}` : ""}`,
-    );
+    labels.unshift({
+      text: `Used ${formattedNames}${allIntegrations ? ` ${sourceNames.length === 1 ? "integration" : "integrations"}` : ""}`,
+    });
   }
-  const sourcedCount = entries.filter(
-    (entry) =>
-      entry.toolSource !== undefined &&
-      resolveT3McpToolDefinition(workEntryToolName(entry)) === null,
-  ).length;
+  const sourcedCount = entries.filter((entry) => summaryFacts(entry).sourced).length;
   const remainingCount =
-    entries.length - sourcedCount - selected.reduce((count, group) => count + group.count, 0);
+    entries.length - sourcedCount - new Set(selected.flatMap((group) => group.entries)).size;
   if (remainingCount > 0) {
-    labels.push(`Performed ${remainingCount} other ${remainingCount === 1 ? "action" : "actions"}`);
+    labels.push({
+      text: `Performed ${remainingCount} other ${remainingCount === 1 ? "action" : "actions"}`,
+    });
   }
-  const sentenceLabels = labels.map((label, index) =>
-    index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1),
-  );
-  const summary =
-    sentenceLabels.length < 3
-      ? sentenceLabels.join(" and ")
-      : `${sentenceLabels.slice(0, -1).join(", ")}, and ${sentenceLabels.at(-1)}`;
+  const parts: WorkLogSummaryPart[] = [];
+  labels.forEach((label, index) => {
+    if (index > 0) {
+      parts.push({
+        text: labels.length < 3 ? " and " : index === labels.length - 1 ? ", and " : ", ",
+      });
+    }
+    const text =
+      index === 0 ? label.text : label.text.charAt(0).toLowerCase() + label.text.slice(1);
+    parts.push({ ...label, text });
+  });
   return {
-    summary,
+    summary: parts.map((part) => part.text).join(""),
+    parts,
     hasFailure: summaries.some((group) => group.failedCount > 0),
     steps: entries.length,
   };

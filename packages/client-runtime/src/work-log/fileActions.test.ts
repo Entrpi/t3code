@@ -11,6 +11,8 @@ import * as DateTime from "effect/DateTime";
 
 import {
   commandWorkAction,
+  commandWorkEffects,
+  formatCommandEffectsLabel,
   formatFileActionLabel,
   readTitleWithPath,
   settleFileActions,
@@ -158,6 +160,75 @@ describe("commandWorkAction", () => {
   );
 });
 
+describe("commandWorkEffects", () => {
+  it.each([
+    [
+      "rm -f a.txt && rm -f b.txt && touch b.txt && ls -l b.txt",
+      {
+        files: [
+          { kind: "delete", path: "a.txt", exact: true },
+          { kind: "delete", path: "b.txt", exact: true },
+          { kind: "create", path: "b.txt", exact: true },
+        ],
+        commits: 0,
+        chained: true,
+      },
+      "Chained command with 1 file created, 2 files deleted",
+    ],
+    [
+      "printf x > a.md && sed -i '' s/x/y/ b.md; echo x >> c.md && mv d.md e.md",
+      {
+        files: [
+          { kind: "write", path: "a.md", exact: false },
+          { kind: "write", path: "c.md", exact: false },
+          { kind: "move", path: "e.md", fromPath: "d.md", exact: true },
+        ],
+        commits: 0,
+        chained: true,
+      },
+      "Chained command with 2 files written, 1 file moved",
+    ],
+    ["git add . && git commit -m test", { files: [], commits: 1, chained: true }, null],
+    [
+      "cd repo && touch notes.md && git -C . commit -am wip",
+      {
+        files: [{ kind: "create", path: "repo/notes.md", exact: true }],
+        commits: 1,
+        chained: true,
+      },
+      "Chained command with 1 file created and 1 commit",
+    ],
+    [
+      "rm a.md b.md",
+      {
+        files: [
+          { kind: "delete", path: "a.md", exact: true },
+          { kind: "delete", path: "b.md", exact: true },
+        ],
+        commits: 0,
+        chained: false,
+      },
+      "Deleted 2 files",
+    ],
+  ] as const)("finds every file action and commit in %s", (input, effects, label) => {
+    expect(commandWorkEffects(command("c", input))).toEqual(effects);
+    expect(formatCommandEffectsLabel(effects)).toBe(label);
+  });
+
+  it.each([
+    ["git add . && git commit -m wip", { status: "running" }],
+    ["git commit -m wip", { exitCode: 1 }],
+    ["touch a.md", {}],
+    ["cat a.md b.md", {}],
+    ["vp test run && ls", {}],
+  ] as const)(
+    "has none for running, failed, single-action and other commands: %s",
+    (input, fields) => {
+      expect(commandWorkEffects(command("c", input, fields))).toBeNull();
+    },
+  );
+});
+
 describe("formatFileActionLabel", () => {
   it.each([
     [{ kind: "create", path: "src/a.ts", exact: true }, "Created src/a.ts"],
@@ -271,6 +342,26 @@ describe("settleFileActions", () => {
       ],
     );
     expect(settled.get("w")).toMatchObject({ kind: "create", additions: 7, deletions: 0 });
+  });
+
+  it("settles each file of a chained command under its own id", () => {
+    const settled = settleFileActions(
+      [command("chain", "printf x > notes.md && rm -f old.md && ls")],
+      [
+        checkpoint([
+          { path: "notes.md", kind: "added", additions: 1, deletions: 0 },
+          { path: "old.md", kind: "deleted", additions: 0, deletions: 2 },
+        ]),
+      ],
+    );
+    expect(settled.get("chain:0")).toEqual({
+      kind: "create",
+      path: "notes.md",
+      exact: false,
+      additions: 1,
+      deletions: 0,
+    });
+    expect(settled.get("chain:1")).toMatchObject({ kind: "delete", additions: 0, deletions: 2 });
   });
 
   it("keeps the live kind when the checkpoint does not list the file", () => {

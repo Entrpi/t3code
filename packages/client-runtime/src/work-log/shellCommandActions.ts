@@ -20,6 +20,8 @@ export interface ShellCommandClassification {
   readonly actions: ReadonlyArray<ShellCommandAction>;
   /** Some part of the command is not a read, search, file action or commit. */
   readonly other: boolean;
+  /** Simple commands read, so more than one means a chain or a pipeline. */
+  readonly segments: number;
 }
 
 const MAX_SEGMENTS = 64;
@@ -77,16 +79,17 @@ export function classifyShellCommand(command: string): ShellCommandClassificatio
   let other = false;
   let cwd = "";
   let pipedInput = false;
-  if (!MAY_ACT.test(command)) return { actions, other: true };
+  let segments = 0;
+  if (!MAY_ACT.test(command)) return { actions, other: true, segments: 1 };
   if (command.length > MAX_CLASSIFIED_LENGTH) {
     const header = heredocHeader(command);
-    if (header === null) return { actions, other: true };
+    if (header === null) return { actions, other: true, segments: 1 };
     command = header;
   }
   let rest: string | null = withoutShellWrapper(command);
-  if (isPowerShellScript(rest)) return { actions, other: true };
+  if (isPowerShellScript(rest)) return { actions, other: true, segments };
 
-  for (let segment = 0; rest && segment < MAX_SEGMENTS; segment += 1) {
+  for (; rest && segments < MAX_SEGMENTS; segments += 1) {
     rest = commandWithoutLeadingShellComments(rest);
     if (rest === null) break;
     const { firstCommand, remainingCommand, separator } = splitFirstShellCommand(rest);
@@ -94,6 +97,7 @@ export function classifyShellCommand(command: string): ShellCommandClassificatio
     // Control flow decides which commands run, so nothing after it is certain.
     if (parsed === null || CONTROL_WORDS.has(parsed.tokens[0] ?? "")) {
       other = true;
+      segments += 1;
       break;
     }
     const resolve = (path: string) =>
@@ -105,6 +109,7 @@ export function classifyShellCommand(command: string): ShellCommandClassificatio
       const target = args.length === 1 ? args[0]! : null;
       if (target === null || !isLiteralPath(target)) {
         other = true;
+        segments += 1;
         break;
       }
       cwd = resolve(target);
@@ -125,7 +130,7 @@ export function classifyShellCommand(command: string): ShellCommandClassificatio
     rest = remainingCommand;
   }
 
-  return { actions, other };
+  return { actions, other, segments };
 }
 
 function resolveAction(

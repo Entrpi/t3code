@@ -31,6 +31,7 @@ import {
   workGroupExpanded,
   type ToolGroupSummaryKind,
   type WorkLogDensity,
+  type WorkLogSummaryPart,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
   deriveRevertTurnCountByUserMessageId,
@@ -73,9 +74,12 @@ import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
   formatCommandActionLabel,
+  formatCommandEffectsLabel,
   formatFileActionLabel,
   readTitleWithPath,
+  settleCommandEffects,
   settleFileActions,
+  type WorkEntryCommandEffects,
   type WorkEntryFileAction,
 } from "@t3tools/client-runtime/work-log/file-actions";
 import {
@@ -152,6 +156,8 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
   const formatPath = (path: string) => formatWorkspaceRelativePath(path, workspaceRoot);
   if (entry.fileAction) return formatFileActionLabel(entry.fileAction, formatPath);
   if (entry.commandAction) return formatCommandActionLabel(entry.commandAction, formatPath);
+  const effectsLabel = entry.commandEffects && formatCommandEffectsLabel(entry.commandEffects);
+  if (effectsLabel) return effectsLabel;
   if (entry.command?.trim()) return commandDisplayText(entry.command);
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
@@ -570,6 +576,8 @@ type MessagesTimelineRowContent =
       steps?: number;
       expanded: boolean;
       summary: string;
+      /** Present when some part is highlighted; joins to `summary`. */
+      summaryParts?: ReadonlyArray<WorkLogSummaryPart>;
       summaryKind: ToolGroupSummaryKind;
       toolSurface?: WorkLogEntry["toolSurface"];
       toolIcon?: WorkLogEntry["toolIcon"];
@@ -617,6 +625,8 @@ type MessagesTimelineRowContent =
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
+      /** Commits the turn's commands made, on its last settled reply. */
+      assistantCommitCount?: number | undefined;
       revertTurnCount?: number | undefined;
       /** Another of your messages follows directly, so the two sit closer together. */
       groupedWithNext?: boolean;
@@ -1390,7 +1400,10 @@ function timelineRowEntries(entries: ReadonlyArray<TimelineEntry>) {
 
 const settledFileActionEntries = new WeakMap<
   TimelineEntry,
-  { readonly action: WorkEntryFileAction; readonly entry: TimelineEntry }
+  {
+    readonly action: WorkEntryFileAction | WorkEntryCommandEffects;
+    readonly entry: TimelineEntry;
+  }
 >();
 
 /** File rows of runs with a ready checkpoint take its kinds and counts; live rows keep theirs. */
@@ -1400,7 +1413,9 @@ function withSettledFileActions(
 ): ReadonlyArray<TimelineEntry> {
   const settled = settleFileActions(
     entries.flatMap((entry) =>
-      entry.kind === "work" && entry.entry.fileAction && entry.entry.structuredPayload
+      entry.kind === "work" &&
+      (entry.entry.fileAction || entry.entry.commandEffects) &&
+      entry.entry.structuredPayload
         ? [entry.entry.structuredPayload]
         : [],
     ),
@@ -1408,14 +1423,35 @@ function withSettledFileActions(
   );
   if (settled.size === 0) return entries;
   return entries.map((entry) => {
-    const action = entry.kind === "work" ? settled.get(entry.entry.id) : undefined;
-    if (entry.kind !== "work" || action === undefined) return entry;
+    if (entry.kind !== "work") return entry;
+    const effects = entry.entry.commandEffects;
+    const action = effects
+      ? settleCommandEffects(entry.entry.id, effects, settled)
+      : settled.get(entry.entry.id);
+    if (action === undefined || action === effects) return entry;
     const cached = settledFileActionEntries.get(entry);
-    if (cached && shallow(cached.action, action)) return cached.entry;
-    const next = { ...entry, entry: { ...entry.entry, fileAction: action } };
+    if (cached && sameSettledAction(cached.action, action)) return cached.entry;
+    const next = {
+      ...entry,
+      entry: {
+        ...entry.entry,
+        ...("files" in action ? { commandEffects: action } : { fileAction: action }),
+      },
+    };
     settledFileActionEntries.set(entry, { action, entry: next });
     return next;
   });
+}
+
+function sameSettledAction(
+  a: WorkEntryFileAction | WorkEntryCommandEffects,
+  b: WorkEntryFileAction | WorkEntryCommandEffects,
+): boolean {
+  if (!("files" in a) || !("files" in b)) return shallow(a, b);
+  return (
+    a.files.length === b.files.length &&
+    a.files.every((file, index) => shallow(file, b.files[index]))
+  );
 }
 
 function deriveTimelineTurnFolds(
@@ -1474,6 +1510,13 @@ export function deriveMessagesTimelineRows(input: {
       input.pendingApprovalRequestIds?.has(item.requestId) === true
     );
   };
+  const commitCountByRunId = new Map<RunId, number>();
+  for (const entry of timelineEntries) {
+    const commits = entry.kind === "work" ? entry.entry.commandEffects?.commits : undefined;
+    const runId = entry.kind === "work" ? entry.entry.runId : undefined;
+    if (commits && runId)
+      commitCountByRunId.set(runId, (commitCountByRunId.get(runId) ?? 0) + commits);
+  }
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
     if (summary.assistantMessageId) {
@@ -1943,7 +1986,7 @@ export function deriveMessagesTimelineRows(input: {
             groupedEntries: visibleGroupedEntries,
             isExpandedToolGroup: false,
             // A file or command action names itself, with the workspace-relative path.
-            ...(singleEntry.fileAction || singleEntry.commandAction
+            ...(singleEntry.fileAction || singleEntry.commandAction || singleEntry.commandEffects
               ? {}
               : {
                   displayLabel:
@@ -1977,7 +2020,7 @@ export function deriveMessagesTimelineRows(input: {
             visibleGroupedEntries.length === 1 ? (visibleGroupedEntries[0] ?? null) : null;
           const groupSummary =
             singleEntry !== null && !workLogEntryIsToolLike(singleEntry)
-              ? { summary: singleEntry.label, steps: 0 }
+              ? { summary: singleEntry.label, parts: [], steps: 0 }
               : summarizeToolGroup(visibleGroupedEntries, density);
           nextRows.push({
             kind: "work-toggle",
@@ -1991,6 +2034,9 @@ export function deriveMessagesTimelineRows(input: {
               : {}),
             expanded,
             summary: groupSummary.summary,
+            ...(groupSummary.parts.some((part) => part.tone !== undefined)
+              ? { summaryParts: groupSummary.parts }
+              : {}),
             summaryKind,
             ...(groupToolSurface ? { toolSurface: groupToolSurface } : {}),
             ...(groupToolIcon ? { toolIcon: groupToolIcon } : {}),
@@ -2116,6 +2162,10 @@ export function deriveMessagesTimelineRows(input: {
       assistantTurnDiffSummary:
         timelineEntry.message.role === "assistant"
           ? turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
+          : undefined,
+      assistantCommitCount:
+        showAssistantMeta && timelineEntry.message.runId
+          ? commitCountByRunId.get(timelineEntry.message.runId)
           : undefined,
       revertTurnCount:
         timelineEntry.message.role === "user"
@@ -2578,6 +2628,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
+        a.assistantCommitCount === bm.assistantCommitCount &&
         a.revertTurnCount === bm.revertTurnCount &&
         a.groupedWithNext === bm.groupedWithNext &&
         a.groupedWithPrevious === bm.groupedWithPrevious &&
