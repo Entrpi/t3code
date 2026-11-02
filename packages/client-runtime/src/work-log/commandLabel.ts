@@ -217,10 +217,19 @@ const COMMAND_WRAPPER_FLAGS: Record<CommandWrapper, ReadonlySet<string>> = {
   sudo: new Set(["-A", "--askpass", "-b", "--background", "-E", "-H", "-i", "-n", "-S"]),
 };
 
-function tokenizeShellCommand(command: string): string[] | null {
+/** `/\s/` for one character; scanners call this per character, where a regex is slow. */
+export function isWhitespaceCharacter(character: string | undefined): boolean {
+  if (character === undefined) return false;
+  const code = character.charCodeAt(0);
+  return code === 32 || (code >= 9 && code <= 13) || (code > 127 && /\s/u.test(character));
+}
+
+export function tokenizeShellCommand(command: string): string[] | null {
   const input = command.trim();
   const tokens: string[] = [];
+  // A token is copied in runs: `input` from `runStart` up to whatever the token leaves out.
   let current = "";
+  let runStart = 0;
   let quote: '"' | "'" | null = null;
   let escaping = false;
   let inBackticks = false;
@@ -231,14 +240,15 @@ function tokenizeShellCommand(command: string): string[] | null {
   for (let index = 0; index < input.length; index += 1) {
     const character = input[index]!;
     if (escaping) {
-      current += character;
       escaping = false;
       tokenStarted = true;
       continue;
     }
     if (character === "\\" && quote !== "'") {
       const nextCharacter = input[index + 1];
-      const isWindowsPath = quote === null && /^(?:[A-Za-z]:|\.{1,2})(?:\\[^\s]*)?$/u.test(current);
+      const isWindowsPath =
+        quote === null &&
+        /^(?:[A-Za-z]:|\.{1,2})(?:\\[^\s]*)?$/u.test(current + input.slice(runStart, index));
       if (
         (quote === '"' || isWindowsPath) &&
         nextCharacter !== undefined &&
@@ -248,16 +258,16 @@ function tokenizeShellCommand(command: string): string[] | null {
         nextCharacter !== "`" &&
         nextCharacter !== "\n"
       ) {
-        current += character;
         tokenStarted = true;
         continue;
       }
+      current += input.slice(runStart, index);
+      runStart = index + 1;
       escaping = true;
       tokenStarted = true;
       continue;
     }
     if (inBackticks) {
-      current += character;
       if (character === "`") inBackticks = false;
       tokenStarted = true;
       continue;
@@ -265,75 +275,69 @@ function tokenizeShellCommand(command: string): string[] | null {
     if (quote !== null) {
       if (character === quote) {
         quote = null;
-      } else {
-        current += character;
+        current += input.slice(runStart, index);
+        runStart = index + 1;
       }
       tokenStarted = true;
       continue;
     }
     if (character === "`") {
-      current += character;
       inBackticks = true;
       tokenStarted = true;
       continue;
     }
     if (character === "$" && input[index + 1] === "{") {
-      current += "${";
       parameterExpansionDepth += 1;
       tokenStarted = true;
       index += 1;
       continue;
     }
     if (character === "{" && parameterExpansionDepth > 0) {
-      current += character;
       parameterExpansionDepth += 1;
       tokenStarted = true;
       continue;
     }
     if (character === "}" && parameterExpansionDepth > 0) {
-      current += character;
       parameterExpansionDepth -= 1;
       tokenStarted = true;
       continue;
     }
     if (character === "$" && input[index + 1] === "(") {
-      current += "$(";
       substitutionDepth += 1;
       tokenStarted = true;
       index += 1;
       continue;
     }
     if (character === "(") {
-      current += character;
       substitutionDepth += 1;
       tokenStarted = true;
       continue;
     }
     if (character === ")" && substitutionDepth > 0) {
-      current += character;
       substitutionDepth -= 1;
       tokenStarted = true;
       continue;
     }
     if (character === '"' || character === "'") {
+      current += input.slice(runStart, index);
+      runStart = index + 1;
       quote = character;
       tokenStarted = true;
       continue;
     }
-    if (/\s/u.test(character)) {
+    if (isWhitespaceCharacter(character)) {
       if (substitutionDepth > 0 || parameterExpansionDepth > 0) {
-        current += character;
         tokenStarted = true;
         continue;
       }
       if (tokenStarted) {
-        tokens.push(current);
+        tokens.push(current + input.slice(runStart, index));
         current = "";
         tokenStarted = false;
       }
+      runStart = index + 1;
       continue;
     }
-    current += character;
     tokenStarted = true;
   }
 
@@ -346,7 +350,7 @@ function tokenizeShellCommand(command: string): string[] | null {
   ) {
     return null;
   }
-  if (tokenStarted) tokens.push(current);
+  if (tokenStarted) tokens.push(current + input.slice(runStart));
   return tokens;
 }
 
@@ -417,7 +421,7 @@ function readHeredocDelimiter(
       quote = character;
       continue;
     }
-    if (/\s/u.test(character) || ";&|<>()".includes(character)) break;
+    if (isWhitespaceCharacter(character) || ";&|<>()".includes(character)) break;
     delimiter += character;
   }
 
@@ -451,7 +455,7 @@ function commandAfterHeredocs(
   return command.slice(cursor).trim() || null;
 }
 
-function splitFirstShellCommand(command: string): ShellCommandSplit {
+export function splitFirstShellCommand(command: string): ShellCommandSplit {
   let quote: '"' | "'" | null = null;
   let powerShellHereStringQuote: '"' | "'" | null = null;
   let escaping = false;
@@ -517,7 +521,9 @@ function splitFirstShellCommand(command: string): ShellCommandSplit {
     }
     if (
       character === "#" &&
-      (index === 0 || /\s/u.test(command[index - 1]!) || ";&|(".includes(command[index - 1]!))
+      (index === 0 ||
+        isWhitespaceCharacter(command[index - 1]) ||
+        ";&|(".includes(command[index - 1]!))
     ) {
       inComment = true;
       commentStart = index;
@@ -598,7 +604,7 @@ function splitFirstShellCommand(command: string): ShellCommandSplit {
 
     const firstCommand = commandWithoutShellComments(command, index, comments).trimStart();
     let nextCommandIndex = index + (isDoubleOperator ? 2 : 1);
-    while (/\s/u.test(command[nextCommandIndex] ?? "")) nextCommandIndex += 1;
+    while (isWhitespaceCharacter(command[nextCommandIndex])) nextCommandIndex += 1;
     const nextCommand = command.slice(nextCommandIndex).trim();
     return {
       firstCommand,
@@ -615,7 +621,7 @@ function splitFirstShellCommand(command: string): ShellCommandSplit {
   };
 }
 
-function commandWithoutLeadingShellComments(command: string): string | null {
+export function commandWithoutLeadingShellComments(command: string): string | null {
   let remainingCommand = command.trimStart();
   while (remainingCommand.startsWith("#")) {
     const newlineIndex = remainingCommand.indexOf("\n");
@@ -625,7 +631,8 @@ function commandWithoutLeadingShellComments(command: string): string | null {
   return remainingCommand || null;
 }
 
-function withoutShellLineContinuations(command: string): string {
+export function withoutShellLineContinuations(command: string): string {
+  if (!command.includes("\\\n") && !command.includes("\\\r")) return command;
   let normalizedCommand = "";
   let quote: '"' | "'" | null = null;
   let escaping = false;
@@ -1376,8 +1383,17 @@ export function withVisibleControlCharacters(text: string): string {
 // A wrapper whose quoting does not balance is kept: the script's end cannot be
 // known, which happens when Codex's secret redaction removes the backslash of
 // an escaped quote inside `-lc "…"`.
-function withoutShellWrapper(command: string): string {
+export function withoutShellWrapper(command: string): string {
   const trimmed = command.trim();
+  // A first word without quoting or expansions is the program as the tokenizer reads it.
+  const firstWord = /^\S*/u.exec(trimmed)![0];
+  if (!/["'\\`$(]/u.test(firstWord)) {
+    const program = firstWord
+      .split("/")
+      .at(-1)!
+      .replace(/\.exe$/iu, "");
+    if (!SHELL_PROGRAMS.has(program)) return trimmed;
+  }
   const split = splitFirstShellCommand(trimmed);
   if (split.remainingCommand !== null) return trimmed;
   const tokens = tokenizeShellCommand(trimmed);
@@ -1400,6 +1416,23 @@ const POWERSHELL_VERBS = new Set(
   ),
 );
 
+/** Every statement `isPowerShellScript` recognizes contains one of these, so most commands skip the split. */
+function mayContainPowerShellStatement(command: string): boolean {
+  if (
+    command.includes("$") &&
+    (/\$(?:env|global|local|script):/iu.test(command) || /\$[A-Za-z_]\w*\s+=/u.test(command))
+  ) {
+    return true;
+  }
+  // A cmdlet is Verb-Noun: a lowercase letter, a hyphen, then an uppercase letter.
+  for (let index = command.indexOf("-"); index > 0; index = command.indexOf("-", index + 1)) {
+    const before = command.charCodeAt(index - 1);
+    const after = command.charCodeAt(index + 1);
+    if (before >= 97 && before <= 122 && after >= 65 && after <= 90) return true;
+  }
+  return false;
+}
+
 function isPowerShellCmdlet(word: string): boolean {
   const cmdlet = /^([A-Z][a-z]+(?:[A-Z][a-z]+)?)-[A-Z][A-Za-z]*$/u.exec(word);
   return cmdlet !== null && POWERSHELL_VERBS.has(cmdlet[1]!);
@@ -1416,9 +1449,10 @@ export function commandHighlightLanguage(command: string): "powershell" | "shell
   return isPowerShellScript(command) ? "powershell" : "shellscript";
 }
 
-function isPowerShellScript(command: string): boolean {
+export function isPowerShellScript(command: string): boolean {
   let rest: string | null = command.trim();
   if (/^&\s*\S/u.test(rest)) return true;
+  if (!mayContainPowerShellStatement(rest)) return false;
   for (let segment = 0; rest && segment < MAX_COMMAND_SEGMENTS; segment += 1) {
     const { firstCommand, remainingCommand } = splitFirstShellCommand(rest);
     const statement = firstCommand.trim();

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { classifyToolActivity, dynamicToolSurface, mergeToolActivityData } from "./toolActivity.ts";
+import {
+  classifyToolActivity,
+  dynamicToolSurface,
+  formatReadToolLabel,
+  mergeToolActivityData,
+  readLineRangeFromOffsetAndLimit,
+} from "./toolActivity.ts";
 
 describe("toolActivity", () => {
   it("classifies from kind and toolName without sniffing titles", () => {
@@ -32,6 +38,34 @@ describe("toolActivity", () => {
     expect(
       mergeToolActivityData({ rawInput: { path: "src/a.ts" } }, { rawInput: { startLine: 4 } }),
     ).toEqual({ rawInput: { path: "src/a.ts", startLine: 4 } });
+  });
+
+  it.each([
+    [{ start: 1, end: 120 }, 0, "Read src/app.ts lines 1-120"],
+    [{ start: 42, end: 42 }, 0, "Read src/app.ts line 42"],
+    [{ start: 30 }, 0, "Read src/app.ts from line 30"],
+    [{ start: 5, end: 9 }, 2, "Read src/app.ts lines 5-9 +2 more"],
+    [{ last: 20 }, 0, "Read src/app.ts last 20 lines"],
+    [{ last: 1 }, 0, "Read src/app.ts last line"],
+  ] as const)("names the lines a read covers: %j", (lines, extraCount, label) => {
+    expect(formatReadToolLabel("src/app.ts", extraCount, lines)).toBe(label);
+  });
+
+  it.each([
+    [
+      { offset: 100, limit: 50 },
+      { start: 100, end: 149 },
+    ],
+    [{ limit: 20 }, { start: 1, end: 20 }],
+    [{ offset: 30 }, { start: 30 }],
+    [
+      { offset: 0, limit: 5 },
+      { start: 1, end: 5 },
+    ],
+    [{}, undefined],
+    [{ offset: "10", limit: -1 }, undefined],
+  ])("reads a 1-based offset and a line limit as a line range: %j", (input, lines) => {
+    expect(readLineRangeFromOffsetAndLimit(input)).toEqual(lines);
   });
 
   it("recognizes computer-use REPL calls before result metadata exists", () => {
