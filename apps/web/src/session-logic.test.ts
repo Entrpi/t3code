@@ -1043,6 +1043,73 @@ describe("V2 session presentation", () => {
     expect(next.entries.at(-1)?.attempt?.status).toBe("superseded");
     expect(previous.entries.at(-1)?.attempt?.status).toBe("running");
   });
+
+  it("re-derives a growing patch's file rows in place and keeps the other entries", () => {
+    const now = DateTime.makeUnsafe("2026-11-03T00:00:00.000Z");
+    const threadId = ThreadId.make("thread-patch");
+    const base = {
+      threadId,
+      runId: RunId.make("run-patch"),
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+    };
+    const command = {
+      ...base,
+      id: TurnItemId.make("item-command"),
+      ordinal: 0,
+      status: "completed" as const,
+      type: "command_execution" as const,
+      input: "npm test",
+      exitCode: 0,
+    } satisfies OrchestrationV2TurnItem;
+    const patch = (paths: ReadonlyArray<string>) =>
+      ({
+        ...base,
+        id: TurnItemId.make("item-patch"),
+        ordinal: 1,
+        status: "running" as const,
+        type: "file_change" as const,
+        fileName: paths[0]!,
+        changes: paths.map((path) => ({ operation: "update", path })),
+      }) satisfies OrchestrationV2TurnItem;
+    const visible = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+      items.map((item, position): OrchestrationV2ProjectedTurnItem => ({
+        position,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: item.id,
+        item,
+      }));
+    const input = {
+      visibleTurnItems: visible([command, patch(["a.ts", "b.ts"])]),
+      optimisticMessages: [],
+    };
+    const previous = deriveTimelineEntriesFromVisibleTurnItemsWithState(input);
+    const nextInput = {
+      ...input,
+      visibleTurnItems: [
+        input.visibleTurnItems[0]!,
+        ...visible([command, patch(["a.ts", "b.ts", "c.ts"])]).slice(1),
+      ],
+    };
+    const next = deriveTimelineEntriesFromVisibleTurnItemsWithState(nextInput, previous);
+
+    expect(next.entries).toEqual(deriveTimelineEntriesFromVisibleTurnItems(nextInput));
+    expect(next.entries.map((entry) => entry.kind === "work" && entry.entry.label)).toEqual([
+      "Ran command",
+      "Edited a.ts",
+      "Edited b.ts",
+      "Edited c.ts",
+    ]);
+    expect(next.entries[0]).toBe(previous.entries[0]);
+  });
 });
 
 describe("native provider presentation in the v2 timeline", () => {

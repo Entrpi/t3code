@@ -8,6 +8,16 @@ import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subage
 import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRuntime";
 import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
 import {
+  commandWorkAction,
+  formatCommandActionLabel,
+  formatFileActionLabel,
+  isFileAction,
+  readTitleWithPath,
+  settleFileActions,
+  workItemFileActions,
+  type WorkEntryFileAction,
+} from "@t3tools/client-runtime/work-log/file-actions";
+import {
   turnItemDetailRevision,
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
@@ -118,8 +128,8 @@ export interface ThreadFeedActivity {
   readonly workEntry: WorkLogPresentationEntry;
   readonly groupedToolDetail?: boolean;
   readonly live?: boolean;
-  /** Lone calls carry the group header's label and id until a second call joins. */
-  readonly groupStandIn?: { readonly groupId: string; readonly label: string };
+  /** Lone calls carry the group header's id, and its label unless the row names itself. */
+  readonly groupStandIn?: { readonly groupId: string; readonly label?: string };
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
 }
 
@@ -252,12 +262,21 @@ function compactWorkEntryText(value: string): string {
   return truncate(value.replace(/\s+/gu, " "), WORK_LOG_LABEL_MAX_LENGTH);
 }
 
-export function workEntryRowLabel(entry: WorkLogPresentationEntry, expanded = false): string {
+export function workEntryRowLabel(
+  entry: WorkLogPresentationEntry,
+  expanded = false,
+  formatPath?: (path: string) => string,
+): string {
   if (entry.itemType === "fork") return entry.label;
   if (expanded && entry.itemType === "reasoning")
     return entry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought";
   const presentation = resolveWorkEntryToolPresentation(entry);
   if (presentation) return presentation.displayName;
+  if (entry.fileAction)
+    return compactWorkEntryText(formatFileActionLabel(entry.fileAction, formatPath));
+  if (entry.commandAction) {
+    return compactWorkEntryText(formatCommandActionLabel(entry.commandAction, formatPath));
+  }
   if (entry.command?.trim()) return compactWorkEntryText(commandDisplayText(entry.command));
   const action = toolGroupAction(entry);
   const isToolRead = action === "read" && entry.itemType === "dynamic_tool";
@@ -273,9 +292,15 @@ export function workEntryRowLabel(entry: WorkLogPresentationEntry, expanded = fa
     if (searchLabel) return searchLabel;
   }
   if (isToolRead) {
-    const [firstPath] = entry.changedFiles ?? collectToolFilePaths(entry.toolData);
+    const paths = entry.changedFiles ?? collectToolFilePaths(entry.toolData);
+    const [firstPath] = paths;
     if (firstPath) {
-      return formatReadToolLabel(firstPath, Math.max(0, (entry.changedFiles?.length ?? 1) - 1));
+      const displayPath = formatPath?.(firstPath) ?? firstPath;
+      const titled =
+        paths.length === 1
+          ? readTitleWithPath(entry.structuredPayload?.title, firstPath, displayPath)
+          : null;
+      return titled ?? formatReadToolLabel(displayPath, Math.max(0, paths.length - 1));
     }
     if (!expanded) return "Read file";
   }
@@ -300,7 +325,7 @@ const projectedEntriesCache = new WeakMap<
   OrchestrationV2ProjectedTurnItem,
   {
     readonly attemptId: RunAttemptId | null;
-    readonly entry: RawThreadFeedEntry;
+    readonly entries: ReadonlyArray<RawThreadFeedEntry>;
   }
 >();
 const localMessageEntriesCache = new WeakMap<
@@ -722,14 +747,21 @@ function toWorkLogEntry(
   switch (item.type) {
     case "reasoning":
       return { ...common, ...(item.text ? { detail: item.text } : {}) };
-    case "command_execution":
+    case "command_execution": {
+      const action = commandWorkAction(item);
       return {
         ...common,
         command: item.input,
         rawCommand: item.input,
         toolTitle: title ?? "Command",
         toolData: item,
+        ...(action === null
+          ? {}
+          : isFileAction(action)
+            ? { fileAction: action }
+            : { commandAction: action }),
       };
+    }
     case "file_change":
       return {
         ...common,
@@ -787,16 +819,36 @@ export function formatItemFullDetail(
   );
 }
 
+/** A patch over several files gives one row per file. */
+function toFeedActivities(
+  row: OrchestrationV2ProjectedTurnItem,
+  attemptId: RunAttemptId | null,
+): ReadonlyArray<ThreadFeedActivity> {
+  const fileRows = workItemFileActions(row.item);
+  return row.item.type === "file_change" && fileRows.length > 0
+    ? fileRows.map((part, index) => toFeedActivity(row, attemptId, { ...part, index }))
+    : [toFeedActivity(row, attemptId)];
+}
+
 function toFeedActivity(
   row: OrchestrationV2ProjectedTurnItem,
   attemptId: RunAttemptId | null,
+  file?: { readonly id: string; readonly action: WorkEntryFileAction; readonly index: number },
 ): ThreadFeedActivity {
   const item = row.item;
   const toolPresentation = itemToolPresentation(item);
-  const summary = itemSummary(item, toolPresentation);
-  const detail = item.type === "notification" ? null : itemPreview(item);
+  const summary = file ? formatFileActionLabel(file.action) : itemSummary(item, toolPresentation);
+  const detail = item.type === "notification" ? null : file ? file.action.path : itemPreview(item);
   const createdAt = DateTime.formatIso(item.startedAt ?? item.updatedAt);
-  const workEntry = toWorkLogEntry(item, createdAt, summary, detail);
+  const itemEntry = toWorkLogEntry(item, createdAt, summary, detail);
+  const workEntry = file
+    ? {
+        ...itemEntry,
+        id: file.id,
+        changedFiles: [file.action.path],
+        fileAction: file.action,
+      }
+    : itemEntry;
   const readPaths =
     item.type === "dynamic_tool" && toolGroupAction(workEntry) === "read"
       ? collectToolFilePaths(item)
@@ -821,7 +873,7 @@ function toFeedActivity(
           .join("\n"),
   );
   return {
-    id: `${row.visibility}:${row.sourceThreadId}:${row.sourceItemId}`,
+    id: `${row.visibility}:${row.sourceThreadId}:${row.sourceItemId}${file?.index ? `:${file.index}` : ""}`,
     createdAt,
     runId: item.runId,
     attemptId,
@@ -1796,7 +1848,16 @@ function appendToolGroupRows(
       id,
       createdAt: singleActivity.createdAt,
       runId: singleActivity.runId,
-      activities: [{ ...singleActivity, live: shimmer, groupStandIn: { groupId, label: summary } }],
+      activities: [
+        {
+          ...singleActivity,
+          live: shimmer,
+          groupStandIn:
+            !live && (singleActivity.workEntry.fileAction || singleActivity.workEntry.commandAction)
+              ? { groupId }
+              : { groupId, label: summary },
+        },
+      ],
       // No trailing margin lets Thinking or a growing group replace the row without shifting the feed.
       continuesWorkLog: true,
     });
@@ -1974,6 +2035,41 @@ function firstChangedIndex<T>(previous: ReadonlyArray<T>, next: ReadonlyArray<T>
   return index;
 }
 
+const settledActivityEntries = new WeakMap<
+  RawThreadFeedEntry,
+  { readonly action: WorkEntryFileAction; readonly entry: RawThreadFeedEntry }
+>();
+
+/** File rows of runs with a ready checkpoint take its kinds and counts; live rows keep theirs. */
+function withSettledFileAction(
+  entry: Extract<RawThreadFeedEntry, { readonly type: "activity" }>,
+  settled: ReadonlyMap<string, WorkEntryFileAction>,
+): RawThreadFeedEntry {
+  const action = settled.get(entry.activity.workEntry.id);
+  if (action === undefined) return entry;
+  const cached = settledActivityEntries.get(entry);
+  if (
+    cached?.action.kind === action.kind &&
+    cached.action.additions === action.additions &&
+    cached.action.deletions === action.deletions
+  ) {
+    return cached.entry;
+  }
+  const { activity } = entry;
+  const next: RawThreadFeedEntry = {
+    ...entry,
+    activity: {
+      ...activity,
+      ...(activity.workEntry.itemType === "file_change"
+        ? { summary: formatFileActionLabel(action) }
+        : {}),
+      workEntry: { ...activity.workEntry, fileAction: action },
+    },
+  };
+  settledActivityEntries.set(entry, { action, entry: next });
+  return next;
+}
+
 export function buildThreadFeed(
   visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
   options?: {
@@ -2079,8 +2175,10 @@ export function buildThreadFeed(
     const attemptId = resolveAttemptId(item);
     const cached = projectedEntriesCache.get(row);
     if (cached?.attemptId === attemptId) {
-      entries.push(cached.entry);
-      entryRows.push(index);
+      for (const entry of cached.entries) {
+        entries.push(entry);
+        entryRows.push(index);
+      }
       continue;
     }
     const createdAt = DateTime.formatIso(item.startedAt ?? item.updatedAt);
@@ -2096,7 +2194,7 @@ export function buildThreadFeed(
         runId: item.runId,
         render,
       };
-      projectedEntriesCache.set(row, { attemptId, entry });
+      projectedEntriesCache.set(row, { attemptId, entries: [entry] });
       entries.push(entry);
       entryRows.push(index);
       continue;
@@ -2113,7 +2211,7 @@ export function buildThreadFeed(
         revision: turnItemDetailRevision(item),
         app,
       };
-      projectedEntriesCache.set(row, { attemptId, entry });
+      projectedEntriesCache.set(row, { attemptId, entries: [entry] });
       entries.push(entry);
       entryRows.push(index);
       continue;
@@ -2149,22 +2247,23 @@ export function buildThreadFeed(
           projectedItem: row,
         },
       };
-      projectedEntriesCache.set(row, { attemptId, entry });
+      projectedEntriesCache.set(row, { attemptId, entries: [entry] });
       entries.push(entry);
       entryRows.push(index);
       continue;
     }
-    const activity = toFeedActivity(row, attemptId);
-    const entry: RawThreadFeedEntry = {
+    const rowEntries = toFeedActivities(row, attemptId).map((activity): RawThreadFeedEntry => ({
       type: "activity",
       id: activity.id,
       createdAt,
       runId: item.runId,
       activity,
-    };
-    projectedEntriesCache.set(row, { attemptId, entry });
-    entries.push(entry);
-    entryRows.push(index);
+    }));
+    projectedEntriesCache.set(row, { attemptId, entries: rowEntries });
+    for (const entry of rowEntries) {
+      entries.push(entry);
+      entryRows.push(index);
+    }
   }
   const retainedMessageIds = new Set([
     ...foldedAnswerMessageIds,
@@ -2209,8 +2308,13 @@ export function buildThreadFeed(
       .filter((checkpoint) => checkpoint.status === "ready" && checkpoint.files.length > 0)
       .map((checkpoint) => [checkpoint.assistantMessageId, checkpoint]),
   );
+  const settledFileActions = settleFileActions(
+    visibleTurnItems.map((row) => row.item),
+    options?.checkpointSummaries ?? [],
+  );
   const grouped = groupAdjacentActivities(
     entries.map((entry) => {
+      if (entry.type === "activity") return withSettledFileAction(entry, settledFileActions);
       if (entry.type !== "message" || entry.message.role !== "assistant") return entry;
       const checkpointSummary = checkpointByMessageId.get(entry.message.id);
       if (!checkpointSummary || checkpointSummary.runId !== entry.message.runId) return entry;

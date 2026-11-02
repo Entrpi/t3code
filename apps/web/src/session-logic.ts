@@ -31,6 +31,14 @@ import {
   contextCompactionLabel,
   workEntryIndicatesToolFailure,
 } from "@t3tools/client-runtime/work-log/presentation";
+import {
+  commandWorkAction,
+  formatFileActionLabel,
+  isFileAction,
+  workItemFileActions,
+  type WorkEntryCommandAction,
+  type WorkEntryFileAction,
+} from "@t3tools/client-runtime/work-log/file-actions";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type {
   ThreadPendingApproval,
@@ -76,6 +84,8 @@ export interface WorkLogEntry {
   readonly command?: string;
   readonly rawCommand?: string;
   readonly changedFiles?: ReadonlyArray<string>;
+  readonly fileAction?: WorkEntryFileAction;
+  readonly commandAction?: WorkEntryCommandAction;
   readonly tone: "thinking" | "tool" | "info" | "error";
   readonly toolTitle?: string;
   readonly toolCallId?: string;
@@ -431,7 +441,8 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         label: title ?? "Thinking",
         ...(item.text ? { detail: item.text } : {}),
       };
-    case "command_execution":
+    case "command_execution": {
+      const action = commandWorkAction(item);
       return {
         ...common,
         label: title ?? "Ran command",
@@ -439,16 +450,27 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         rawCommand: item.input,
         toolTitle: title ?? "Command",
         toolData: item,
+        ...(action === null
+          ? {}
+          : isFileAction(action)
+            ? { fileAction: action }
+            : { commandAction: action }),
       };
+    }
     case "file_change": {
+      const [first] = workItemFileActions(item);
       return {
         ...common,
-        label:
-          title ??
-          (item.changes !== undefined && item.changes.length > 1
-            ? `Changed ${item.changes.length} files`
-            : `Changed ${item.fileName}`),
-        changedFiles: item.changes?.map((change) => change.path) ?? [item.fileName],
+        label: first
+          ? formatFileActionLabel(first.action)
+          : (title ??
+            (item.changes !== undefined && item.changes.length > 1
+              ? `Changed ${item.changes.length} files`
+              : `Changed ${item.fileName}`)),
+        changedFiles: first
+          ? [first.action.path]
+          : (item.changes?.map((change) => change.path) ?? [item.fileName]),
+        ...(first ? { fileAction: first.action } : {}),
         toolTitle: title ?? "File change",
         toolData: item,
       };
@@ -738,13 +760,27 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
       continue;
     }
 
-    entries.push({
-      id: item.id,
-      kind: "work",
-      createdAt,
-      entry: projectedWorkEntry(row),
-      ...attemptMetadata,
-    });
+    const entry = projectedWorkEntry(row);
+    const fileRows = workItemFileActions(item);
+    if (item.type !== "file_change" || fileRows.length < 2) {
+      entries.push({ id: item.id, kind: "work", createdAt, entry, ...attemptMetadata });
+      continue;
+    }
+    for (const { id, action } of fileRows) {
+      entries.push({
+        id,
+        kind: "work",
+        createdAt,
+        entry: {
+          ...entry,
+          id,
+          label: formatFileActionLabel(action),
+          changedFiles: [action.path],
+          fileAction: action,
+        },
+        ...attemptMetadata,
+      });
+    }
   }
 
   const retainedMessageIds = new Set([...committedMessageIds, ...foldedAnswerMessageIds]);
@@ -901,9 +937,10 @@ export function isStreamingTurnItemTextUpdate(
 }
 
 /**
- * A changed tool or work item maps to exactly one entry with the item's id.
- * Messages and question answers take part in cross-entry dedupe, and anchored
- * messages are placed by createdAt, so those changes rebuild.
+ * A changed tool or work item maps to its own entries: one with the item's id,
+ * or one per file for a patch. Messages and question answers take part in
+ * cross-entry dedupe, and anchored messages are placed by createdAt, so those
+ * changes rebuild.
  */
 function canRederiveInPlace(
   input: TimelineEntriesInput,
@@ -919,6 +956,10 @@ function canRederiveInPlace(
     ((input.anchoredMessages?.length ?? 0) === 0 ||
       projectedItemCreatedAt(item) === projectedItemCreatedAt(previousItem))
   );
+}
+
+function timelineEntryItemId(entry: TimelineEntry): string {
+  return entry.kind === "work" ? (entry.entry.structuredPayload?.id ?? entry.id) : entry.id;
 }
 
 function reuseTimelineEntries(
@@ -983,22 +1024,30 @@ function reuseTimelineEntries(
           optimisticMessages: [],
           anchoredMessages: [],
         });
+  const rederivedByItem = new Map<string, TimelineEntry[]>();
+  for (const entry of rederived) {
+    const itemId = timelineEntryItemId(entry);
+    const itemEntries = rederivedByItem.get(itemId);
+    if (itemEntries === undefined) rederivedByItem.set(itemId, [entry]);
+    else itemEntries.push(entry);
+  }
   if (
-    rederived.length !== changedItems.length ||
-    rederived.some((entry, index) => entry.id !== changedItems[index]!.item.id)
+    rederivedByItem.size !== changedItems.length ||
+    changedItems.some(({ item }) => !rederivedByItem.has(item.id))
   ) {
     return null;
   }
-  const rederivedEntries = new Map(rederived.map((entry) => [entry.id, entry]));
-  if (replacements.size === 0 && rederivedEntries.size === 0 && !appended) {
+  if (replacements.size === 0 && rederivedByItem.size === 0 && !appended) {
     return previous.entries;
   }
-  let rederivedCount = 0;
-  const entries = previous.entries.map((entry): TimelineEntry => {
-    const rederivedEntry = rederivedEntries.get(entry.id);
-    if (rederivedEntry !== undefined) {
-      rederivedCount += 1;
-      return rederivedEntry;
+  const replacedItemIds = new Set<string>();
+  const entries = previous.entries.flatMap((entry): TimelineEntry | TimelineEntry[] => {
+    const itemId = timelineEntryItemId(entry);
+    const itemEntries = rederivedByItem.get(itemId);
+    if (itemEntries !== undefined) {
+      if (replacedItemIds.has(itemId)) return [];
+      replacedItemIds.add(itemId);
+      return itemEntries;
     }
     const row =
       entry.kind === "message" && entry.projectedItem !== undefined
@@ -1015,7 +1064,7 @@ function reuseTimelineEntries(
       },
     };
   });
-  if (rederivedCount !== rederivedEntries.size) return null;
+  if (replacedItemIds.size !== rederivedByItem.size) return null;
   if (appended) {
     entries.push(
       ...deriveTimelineEntriesFromVisibleTurnItems({

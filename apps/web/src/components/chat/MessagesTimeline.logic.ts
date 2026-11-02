@@ -69,6 +69,13 @@ import { mcpAppReferencesEqual, type McpAppReference } from "@t3tools/shared/mcp
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
+  formatCommandActionLabel,
+  formatFileActionLabel,
+  readTitleWithPath,
+  settleFileActions,
+  type WorkEntryFileAction,
+} from "@t3tools/client-runtime/work-log/file-actions";
+import {
   collectToolFilePaths,
   formatReadToolLabel,
   formatSearchToolLabel,
@@ -139,6 +146,9 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
   }
   const toolPresentation = resolveWorkEntryToolPresentation(entry);
   if (toolPresentation) return toolPresentation.displayName;
+  const formatPath = (path: string) => formatWorkspaceRelativePath(path, workspaceRoot);
+  if (entry.fileAction) return formatFileActionLabel(entry.fileAction, formatPath);
+  if (entry.commandAction) return formatCommandActionLabel(entry.commandAction, formatPath);
   if (entry.command?.trim()) return commandDisplayText(entry.command);
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
@@ -150,7 +160,15 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
   }
   const readPaths = action === "read" ? workEntryReadPaths(entry, workspaceRoot) : [];
   if (action === "read" && readPaths[0]) {
-    return formatReadToolLabel(readPaths[0], readPaths.length - 1);
+    const titled =
+      readPaths.length === 1
+        ? readTitleWithPath(
+            entry.structuredPayload?.title,
+            workEntryReadRawPaths(entry)[0]!,
+            readPaths[0],
+          )
+        : null;
+    return titled ?? formatReadToolLabel(readPaths[0], readPaths.length - 1);
   }
   const providerRetry =
     entry.projectedItem?.item.type === "error" && entry.projectedItem.item.retry !== undefined;
@@ -1365,6 +1383,36 @@ function timelineRowEntries(entries: ReadonlyArray<TimelineEntry>) {
   return withoutSubagentDelegationRows(settleSupersededReasoning(entries));
 }
 
+const settledFileActionEntries = new WeakMap<
+  TimelineEntry,
+  { readonly action: WorkEntryFileAction; readonly entry: TimelineEntry }
+>();
+
+/** File rows of runs with a ready checkpoint take its kinds and counts; live rows keep theirs. */
+function withSettledFileActions(
+  entries: ReadonlyArray<TimelineEntry>,
+  checkpoints: ReadonlyArray<TurnDiffSummary>,
+): ReadonlyArray<TimelineEntry> {
+  const settled = settleFileActions(
+    entries.flatMap((entry) =>
+      entry.kind === "work" && entry.entry.fileAction && entry.entry.structuredPayload
+        ? [entry.entry.structuredPayload]
+        : [],
+    ),
+    checkpoints,
+  );
+  if (settled.size === 0) return entries;
+  return entries.map((entry) => {
+    const action = entry.kind === "work" ? settled.get(entry.entry.id) : undefined;
+    if (entry.kind !== "work" || action === undefined) return entry;
+    const cached = settledFileActionEntries.get(entry);
+    if (cached && shallow(cached.action, action)) return cached.entry;
+    const next = { ...entry, entry: { ...entry.entry, fileAction: action } };
+    settledFileActionEntries.set(entry, { action, entry: next });
+    return next;
+  });
+}
+
 function deriveTimelineTurnFolds(
   input: Pick<
     MessagesTimelineRowsInput,
@@ -1408,7 +1456,10 @@ export function deriveMessagesTimelineRows(input: {
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
-  const timelineEntries = timelineRowEntries(input.timelineEntries);
+  const timelineEntries = withSettledFileActions(
+    timelineRowEntries(input.timelineEntries),
+    input.turnDiffSummaries,
+  );
   const isPendingApproval = (entry: WorkLogEntry) => {
     const item = entry.projectedItem?.item;
     return (
@@ -1881,10 +1932,15 @@ export function deriveMessagesTimelineRows(input: {
             createdAt: timelineEntry.createdAt,
             groupedEntries: visibleGroupedEntries,
             isExpandedToolGroup: false,
-            displayLabel:
-              toolGroupAction(singleEntry) === "edit"
-                ? summarizeToolGroup(visibleGroupedEntries).summary
-                : singleToolCallLabel(singleEntry),
+            // A file or command action names itself, with the workspace-relative path.
+            ...(singleEntry.fileAction || singleEntry.commandAction
+              ? {}
+              : {
+                  displayLabel:
+                    toolGroupAction(singleEntry) === "edit"
+                      ? summarizeToolGroup(visibleGroupedEntries).summary
+                      : singleToolCallLabel(singleEntry),
+                }),
           });
         } else {
           const groupId = workGroupId(timelineEntry.id);

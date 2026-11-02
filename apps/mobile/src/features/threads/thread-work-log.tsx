@@ -86,6 +86,9 @@ import {
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
+import { fileActionVerb } from "@t3tools/client-runtime/work-log/file-actions";
+import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
 import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText";
 import type { FilePreviewSource } from "../../components/FilePreviewModal";
@@ -496,6 +499,7 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
       copied={props.copiedRowId === row.id}
       expanded={props.expandedRows[row.id] ?? false}
       environmentId={props.environmentId}
+      workspaceRoot={props.workspaceRoot}
       iconSubtleColor={props.iconSubtleColor}
       onCopyRow={props.onCopyRow}
       onToggleRow={props.onToggleRow}
@@ -1059,12 +1063,33 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
       </Text>
     );
   const toolPresentation = resolveWorkEntryToolPresentation(row.workEntry);
-  const previewText = row.groupStandIn?.label ?? workEntryRowLabel(row.workEntry);
+  const formatPath = (path: string) =>
+    resolveWorkspaceRelativeFilePath(props.workspaceRoot, path) ?? path;
+  const previewText =
+    row.groupStandIn?.label ?? workEntryRowLabel(row.workEntry, false, formatPath);
   const answerPreview = row.workEntry.questionAnswer
     ? getQuestionAnswerPreview(row.workEntry.questionAnswer)
     : null;
-  const accessiblePreview = [previewText, answerPreview].filter(Boolean).join(": ");
-  const displayText = row.groupStandIn?.label ?? workEntryRowLabel(row.workEntry, expanded);
+  const fileAction = row.groupStandIn?.label === undefined ? row.workEntry.fileAction : undefined;
+  const fileStat =
+    fileAction?.additions !== undefined && fileAction.deletions !== undefined
+      ? {
+          additions: fileAction.kind === "delete" ? null : fileAction.additions,
+          deletions: fileAction.kind === "create" ? null : fileAction.deletions,
+        }
+      : null;
+  const accessiblePreview = [
+    previewText,
+    answerPreview,
+    fileStat?.additions == null ? null : `${fileStat.additions} additions`,
+    fileStat?.deletions == null ? null : `${fileStat.deletions} deletions`,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const displayText =
+    row.groupStandIn?.label ?? workEntryRowLabel(row.workEntry, expanded, formatPath);
+  const filePath = fileAction ? formatPath(fileAction.path) : null;
+  const fileNameStart = filePath === null ? 0 : filePath.lastIndexOf("/") + 1;
   const isSystemNotice = row.projectedItem.item.type === "system_notice";
   const isUsageLimit =
     row.projectedItem.item.type === "error" &&
@@ -1150,7 +1175,18 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
             <WorkLogLabel
               tone={isUsageLimit ? "warning" : iconIsDestructive ? "danger" : "default"}
             >
-              {displayText}
+              {fileAction && filePath !== null ? (
+                <>
+                  {`${fileActionVerb(fileAction.kind)} `}
+                  {fileAction.fromPath === undefined
+                    ? null
+                    : `${formatPath(fileAction.fromPath)} → `}
+                  {filePath.slice(0, fileNameStart)}
+                  <Text className="text-foreground">{filePath.slice(fileNameStart)}</Text>
+                </>
+              ) : (
+                displayText
+              )}
               {answerPreview ? (
                 <Text
                   className={
@@ -1167,6 +1203,20 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         )}
 
         <View className="shrink-0 flex-row items-center gap-px">
+          {fileStat ? (
+            <View className="flex-row items-center gap-1 pr-1">
+              {fileStat.additions === null ? null : (
+                <Text className="font-t3-medium text-xs tabular-nums text-adaptive-emerald-700-300">
+                  +{formatDiffCount(fileStat.additions)}
+                </Text>
+              )}
+              {fileStat.deletions === null ? null : (
+                <Text className="font-t3-medium text-xs tabular-nums text-adaptive-rose-700-300">
+                  −{formatDiffCount(fileStat.deletions)}
+                </Text>
+              )}
+            </View>
+          ) : null}
           {props.copied ? (
             <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">
               Copied

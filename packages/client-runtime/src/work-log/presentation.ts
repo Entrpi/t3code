@@ -23,6 +23,11 @@ import { formatTokens } from "@t3tools/shared/usageFormat";
 import { classifyToolActivity } from "@t3tools/shared/toolActivity";
 import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
 
+import type {
+  WorkEntryCommandAction,
+  WorkEntryFileAction,
+} from "@t3tools/client-runtime/work-log/file-actions";
+
 import {
   summarizeT3ToolCalls,
   t3ToolResultIndicatesFailure,
@@ -90,6 +95,8 @@ export interface WorkLogPresentationEntry {
   readonly detail?: string;
   readonly viewedImagePath?: string;
   readonly changedFiles?: ReadonlyArray<string>;
+  readonly fileAction?: WorkEntryFileAction;
+  readonly commandAction?: WorkEntryCommandAction;
   readonly toolTitle?: string;
   readonly toolData?: unknown;
   readonly requestKind?: string;

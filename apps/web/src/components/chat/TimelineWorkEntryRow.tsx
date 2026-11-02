@@ -24,6 +24,12 @@ import {
   turnItemNeedsDetailFetch,
 } from "@t3tools/client-runtime/work-log/item-detail";
 import { claudeSkillInvocation } from "@t3tools/shared/toolActivity";
+import {
+  fileActionVerb,
+  type WorkEntryFileAction,
+} from "@t3tools/client-runtime/work-log/file-actions";
+import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import { DiffStatLabel } from "./DiffStatLabel";
 import { memo, use, useState, type KeyboardEvent } from "react";
 import {
   workEntryDisplayIndicatesToolFailure,
@@ -108,6 +114,27 @@ export function ThreadReadLabel({
       )}
       <span className="shrink-0">”</span>
     </span>
+  );
+}
+
+function FileActionLabel({
+  action,
+  workspaceRoot,
+}: {
+  action: WorkEntryFileAction;
+  workspaceRoot: string | undefined;
+}) {
+  const path = formatWorkspaceRelativePath(action.path, workspaceRoot);
+  const nameStart = path.lastIndexOf("/") + 1;
+  return (
+    <>
+      {fileActionVerb(action.kind)}{" "}
+      {action.fromPath === undefined
+        ? null
+        : `${formatWorkspaceRelativePath(action.fromPath, workspaceRoot)} → `}
+      <span className="text-muted-foreground">{path.slice(0, nameStart)}</span>
+      <span className="text-foreground">{path.slice(nameStart)}</span>
+    </>
   );
 }
 
@@ -369,6 +396,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         ? "text-secondary-label"
         : "text-foreground/80";
   const threadLabel = isReasoning ? null : threadReadLabel(previewText, threadTarget);
+  const fileAction =
+    displayLabel === undefined && !questionHeading ? workEntry.fileAction : undefined;
   const accessiblePreview = [threadLabel?.text ?? previewText, answerPreview]
     .filter(Boolean)
     .join(": ");
@@ -434,6 +463,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                   environmentId={ctx.activeThreadEnvironmentId}
                   linked
                 />
+              ) : fileAction ? (
+                <FileActionLabel action={fileAction} workspaceRoot={workspaceRoot} />
               ) : (
                 previewText
               )}
@@ -482,6 +513,21 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             >
               Open subagent
             </InlineButton>
+          ) : null}
+          {fileAction?.additions !== undefined && fileAction.deletions !== undefined ? (
+            <DiffStatLabel
+              additions={fileAction.additions}
+              deletions={fileAction.deletions}
+              sides={
+                fileAction.kind === "create"
+                  ? "additions"
+                  : fileAction.kind === "delete"
+                    ? "deletions"
+                    : "both"
+              }
+              layout="inline"
+              className="shrink-0 text-xs"
+            />
           ) : null}
           {showFailedIndicator &&
           !showDestructiveRowStyle &&
