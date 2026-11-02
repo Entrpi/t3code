@@ -5,6 +5,7 @@ import {
   dynamicToolTitle,
   formatReadToolLabel,
   formatSearchToolLabel,
+  readLineRangeFromOffsetAndLimit,
 } from "@t3tools/shared/toolActivity";
 import { field, text } from "../unknownField.ts";
 import { mergeWorkflowAgentMetadata, type WorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
@@ -5687,7 +5688,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             status: input.status,
             title:
               readPath !== undefined
-                ? formatReadToolLabel(readPath)
+                ? formatReadToolLabel(
+                    readPath,
+                    0,
+                    readLineRangeFromOffsetAndLimit({
+                      offset: inputRecordValue(input.toolInput, "offset"),
+                      limit: inputRecordValue(input.toolInput, "limit"),
+                    }),
+                  )
                 : (searchTitle ??
                   dynamicToolTitle(input.toolName, nativeToolInput) ??
                   input.presentation?.title ??

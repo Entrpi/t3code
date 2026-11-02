@@ -383,13 +383,39 @@ export function formatSearchToolLabel(
   return undefined;
 }
 
-export function formatReadToolLabel(path: string, extraCount = 0): string {
+/** 1-based line numbers; no `end` means through the end of the file. */
+export interface ReadLineRange {
+  readonly start: number;
+  readonly end?: number;
+}
+
+export function formatReadToolLabel(path: string, extraCount = 0, lines?: ReadLineRange): string {
   const trimmed = path.trim();
   const suffix = extraCount > 0 ? ` +${extraCount} more` : "";
   if (!trimmed) {
     return `Read file${suffix}`;
   }
-  return `Read ${trimmed}${suffix}`;
+  const range =
+    lines === undefined
+      ? ""
+      : lines.end === undefined
+        ? ` from line ${lines.start}`
+        : lines.end === lines.start
+          ? ` line ${lines.start}`
+          : ` lines ${lines.start}-${lines.end}`;
+  return `Read ${trimmed}${range}${suffix}`;
+}
+
+/** Read tools such as Claude's take a 1-based start line (`offset`) and a line count (`limit`). */
+export function readLineRangeFromOffsetAndLimit(input: {
+  readonly offset?: unknown;
+  readonly limit?: unknown;
+}): ReadLineRange | undefined {
+  const offset = typeof input.offset === "number" && input.offset >= 0 ? input.offset : undefined;
+  const limit = typeof input.limit === "number" && input.limit > 0 ? input.limit : undefined;
+  if (offset === undefined && limit === undefined) return undefined;
+  const start = Math.max(1, Math.floor(offset ?? 1));
+  return limit === undefined ? { start } : { start, end: start + Math.floor(limit) - 1 };
 }
 
 export interface ToolActivityPresentationInput {

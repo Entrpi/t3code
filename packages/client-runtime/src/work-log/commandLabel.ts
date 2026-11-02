@@ -217,7 +217,7 @@ const COMMAND_WRAPPER_FLAGS: Record<CommandWrapper, ReadonlySet<string>> = {
   sudo: new Set(["-A", "--askpass", "-b", "--background", "-E", "-H", "-i", "-n", "-S"]),
 };
 
-function tokenizeShellCommand(command: string): string[] | null {
+export function tokenizeShellCommand(command: string): string[] | null {
   const input = command.trim();
   const tokens: string[] = [];
   let current = "";
@@ -451,7 +451,7 @@ function commandAfterHeredocs(
   return command.slice(cursor).trim() || null;
 }
 
-function splitFirstShellCommand(command: string): ShellCommandSplit {
+export function splitFirstShellCommand(command: string): ShellCommandSplit {
   let quote: '"' | "'" | null = null;
   let powerShellHereStringQuote: '"' | "'" | null = null;
   let escaping = false;
@@ -615,7 +615,7 @@ function splitFirstShellCommand(command: string): ShellCommandSplit {
   };
 }
 
-function commandWithoutLeadingShellComments(command: string): string | null {
+export function commandWithoutLeadingShellComments(command: string): string | null {
   let remainingCommand = command.trimStart();
   while (remainingCommand.startsWith("#")) {
     const newlineIndex = remainingCommand.indexOf("\n");
@@ -625,7 +625,7 @@ function commandWithoutLeadingShellComments(command: string): string | null {
   return remainingCommand || null;
 }
 
-function withoutShellLineContinuations(command: string): string {
+export function withoutShellLineContinuations(command: string): string {
   let normalizedCommand = "";
   let quote: '"' | "'" | null = null;
   let escaping = false;
@@ -1376,7 +1376,7 @@ export function withVisibleControlCharacters(text: string): string {
 // A wrapper whose quoting does not balance is kept: the script's end cannot be
 // known, which happens when Codex's secret redaction removes the backslash of
 // an escaped quote inside `-lc "…"`.
-function withoutShellWrapper(command: string): string {
+export function withoutShellWrapper(command: string): string {
   const trimmed = command.trim();
   const split = splitFirstShellCommand(trimmed);
   if (split.remainingCommand !== null) return trimmed;
@@ -1416,7 +1416,7 @@ export function commandHighlightLanguage(command: string): "powershell" | "shell
   return isPowerShellScript(command) ? "powershell" : "shellscript";
 }
 
-function isPowerShellScript(command: string): boolean {
+export function isPowerShellScript(command: string): boolean {
   let rest: string | null = command.trim();
   if (/^&\s*\S/u.test(rest)) return true;
   for (let segment = 0; rest && segment < MAX_COMMAND_SEGMENTS; segment += 1) {
