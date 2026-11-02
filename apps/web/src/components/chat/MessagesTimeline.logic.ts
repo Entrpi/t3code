@@ -26,6 +26,7 @@ import {
   summarizeToolGroup,
   toolGroupAction,
   toolGroupSummaryKind,
+  workEntryReadRawPaths,
   contextCompactionTokenCounts,
   liveWorkGroupId,
   workGroupExpanded,
@@ -81,11 +82,7 @@ import {
   settleFileActions,
   workItemCommitCount,
 } from "@t3tools/client-runtime/work-log/file-actions";
-import {
-  collectToolFilePaths,
-  formatReadToolLabel,
-  formatSearchToolLabel,
-} from "@t3tools/shared/toolActivity";
+import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 
 function timelineEntryRunId(entry: TimelineEntry): RunId | null {
@@ -125,17 +122,6 @@ function workEntryToolDataRecord(entry: WorkLogEntry): Record<string, unknown> |
     !Array.isArray(entry.toolData)
     ? (entry.toolData as Record<string, unknown>)
     : undefined;
-}
-
-function workEntryReadRawPaths(entry: WorkLogEntry): readonly string[] {
-  const fromChanged = entry.changedFiles ?? [];
-  if (fromChanged.length > 0) return fromChanged;
-  const structured = entry.structuredPayload;
-  if (structured?.type === "dynamic_tool") {
-    const structuredPaths = collectToolFilePaths({ input: structured.input });
-    if (structuredPaths.length > 0) return structuredPaths;
-  }
-  return collectToolFilePaths(workEntryToolDataRecord(entry));
 }
 
 function workEntryReadPaths(entry: WorkLogEntry, workspaceRoot: string | undefined): string[] {

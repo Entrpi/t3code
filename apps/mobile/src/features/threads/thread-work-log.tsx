@@ -29,6 +29,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import {
@@ -86,12 +87,15 @@ import {
   type ToolGroupSummaryKind,
   type WorkLogSummaryPart,
   type WorkLogSummaryTone,
+  workEntryLabelPath,
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
 import { fileActionVerb } from "@t3tools/client-runtime/work-log/file-actions";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
-import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
+import { resolveWorkspaceFilePath, resolveWorkspaceRelativeFilePath } from "../files/filePath";
+import { Menu } from "../../components/ui/Menu";
+import type { MarkdownFileContextMenu } from "../../native/SelectableMarkdownText.types";
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
 import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText";
 import type { FilePreviewSource } from "../../components/FilePreviewModal";
@@ -491,6 +495,11 @@ interface ThreadWorkLogProps {
   readonly renderImage: MarkdownImageRenderer;
   readonly renderReasoning: (text: string) => ReactNode;
   readonly onPressPreview: (source: FilePreviewSource) => void;
+  /** Long-press actions for the file a row names, keyed by its absolute path. */
+  readonly fileMenu?: {
+    readonly menu: (path: string) => MarkdownFileContextMenu | undefined;
+    readonly onAction: (path: string, actionId: string) => void;
+  };
 }
 
 export function ThreadWorkLog(props: ThreadWorkLogProps) {
@@ -510,6 +519,7 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
       renderReasoning={props.renderReasoning}
       onPressPreview={props.onPressPreview}
       themeAppearance={props.themeAppearance}
+      {...(props.fileMenu ? { fileMenu: props.fileMenu } : {})}
     />
   );
 
@@ -1111,6 +1121,38 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
     (row.workEntry.commandEffects?.commits ?? 0) > 0;
   const toolIcon = row.workEntry.toolIcon ?? row.workEntry.toolSource?.icon;
   const icon = reasoning ? "brain" : (toolPresentation?.icon ?? workRowSymbolName(row.icon));
+  const labelPath =
+    props.fileMenu && row.groupStandIn === undefined ? workEntryLabelPath(row.workEntry) : null;
+  const absolutePath =
+    labelPath !== null && props.workspaceRoot
+      ? resolveWorkspaceFilePath(props.workspaceRoot, labelPath)
+      : labelPath;
+  const fileMenu = absolutePath === null ? undefined : props.fileMenu?.menu(absolutePath);
+  // A deleted file keeps only the copy actions.
+  const fileGone = row.workEntry.fileAction?.kind === "delete";
+  const fileMenuActions = fileMenu && [
+    { id: "copy-row", title: "Copy" },
+    ...fileMenu.actions
+      .filter((action) => !fileGone || action.id.startsWith("copy-"))
+      .map(({ id, title }) => ({ id, title })),
+  ];
+  const longPressHint = fileMenuActions ? "Long press for file actions." : "Long press to copy.";
+  const withFileMenu = (pressable: ReactElement) =>
+    fileMenuActions && absolutePath !== null ? (
+      <Menu
+        {...(fileMenu?.title ? { title: fileMenu.title } : {})}
+        actions={fileMenuActions}
+        shouldOpenOnLongPress
+        onPressAction={({ nativeEvent }) => {
+          if (nativeEvent.event === "copy-row") props.onCopyRow(row.id, row.getCopyText());
+          else props.fileMenu?.onAction(absolutePath, nativeEvent.event);
+        }}
+      >
+        {pressable}
+      </Menu>
+    ) : (
+      pressable
+    );
 
   return (
     <Animated.View
@@ -1118,157 +1160,161 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
       className="overflow-hidden"
       {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
     >
-      <WorkLogPressable
-        accessibilityRole={
-          notifiedSubagentThreadId !== undefined ? "link" : canExpand ? "button" : undefined
-        }
-        accessibilityLabel={failed ? `${accessiblePreview}, tool call failed` : accessiblePreview}
-        accessibilityHint={
-          notifiedSubagentThreadId !== undefined
-            ? "Opens this agent's thread. Long press to copy."
-            : canExpand
-              ? `Double tap to ${expanded ? "hide" : "show"} full details. Long press to copy.`
-              : "Long press to copy."
-        }
-        accessibilityState={canExpand ? { expanded } : undefined}
-        onPress={() => {
-          if (notifiedSubagentThreadId !== undefined) {
-            openLinkedThread({
-              environmentId: String(props.environmentId),
-              threadId: String(notifiedSubagentThreadId),
-            });
-            return;
+      {withFileMenu(
+        <WorkLogPressable
+          accessibilityRole={
+            notifiedSubagentThreadId !== undefined ? "link" : canExpand ? "button" : undefined
           }
-          if (canExpand) {
-            void Haptics.selectionAsync();
-            props.onToggleRow(row.id, props.anchorKey, row.groupStandIn?.groupId);
+          accessibilityLabel={failed ? `${accessiblePreview}, tool call failed` : accessiblePreview}
+          accessibilityHint={
+            notifiedSubagentThreadId !== undefined
+              ? "Opens this agent's thread. Long press to copy."
+              : canExpand
+                ? `Double tap to ${expanded ? "hide" : "show"} full details. ${longPressHint}`
+                : longPressHint
           }
-        }}
-        onLongPress={() => props.onCopyRow(row.id, row.getCopyText())}
-      >
-        {row.live && !expanded ? (
-          <ShimmeringWorkContent
-            environmentId={props.environmentId}
-            icon={icon}
-            iconSubtleColor={props.iconSubtleColor}
-            label={displayText}
-            showIcon
-            themeAppearance={props.themeAppearance}
-            toolIcon={toolIcon}
-          />
-        ) : (
-          <>
-            <WorkLogIconSlot>
-              {toolIcon ? (
-                <ToolActivityIconView
-                  environmentId={props.environmentId}
-                  icon={toolIcon}
-                  fallback={icon}
-                  fallbackColor={props.iconSubtleColor}
-                  themeAppearance={props.themeAppearance}
-                />
-              ) : (
-                <WorkLogIcon
-                  icon={icon}
-                  color={props.iconSubtleColor}
-                  colorClassName={
-                    isUsageLimit
-                      ? "accent-warning-foreground"
-                      : iconIsDestructive
-                        ? "accent-adaptive-rose-600-400"
-                        : failed
-                          ? "accent-danger-foreground/40"
-                          : madeCommit
-                            ? "accent-adaptive-violet-600-400"
-                            : undefined
-                  }
-                />
-              )}
-            </WorkLogIconSlot>
-            <WorkLogLabel
-              tone={
-                isUsageLimit
-                  ? "warning"
-                  : iconIsDestructive
-                    ? "danger"
-                    : madeCommit
-                      ? "commit"
-                      : "default"
-              }
-            >
-              {fileAction && filePath !== null ? (
-                <>
-                  {`${fileActionVerb(fileAction.kind)} `}
-                  {fileAction.fromPath === undefined
-                    ? null
-                    : `${formatPath(fileAction.fromPath)} → `}
-                  {filePath.slice(0, fileNameStart)}
-                  <Text className="text-foreground">{filePath.slice(fileNameStart)}</Text>
-                </>
-              ) : (
-                displayText
-              )}
-              {answerPreview ? (
-                <Text
-                  className={
-                    !expanded &&
-                    row.workEntry.questionAnswer &&
-                    hasQuestionAnswer(row.workEntry.questionAnswer)
-                      ? "text-foreground"
-                      : "text-foreground-subtle"
-                  }
-                >{`  ${answerPreview}`}</Text>
-              ) : null}
-            </WorkLogLabel>
-          </>
-        )}
+          accessibilityState={canExpand ? { expanded } : undefined}
+          onPress={() => {
+            if (notifiedSubagentThreadId !== undefined) {
+              openLinkedThread({
+                environmentId: String(props.environmentId),
+                threadId: String(notifiedSubagentThreadId),
+              });
+              return;
+            }
+            if (canExpand) {
+              void Haptics.selectionAsync();
+              props.onToggleRow(row.id, props.anchorKey, row.groupStandIn?.groupId);
+            }
+          }}
+          {...(fileMenuActions
+            ? {}
+            : { onLongPress: () => props.onCopyRow(row.id, row.getCopyText()) })}
+        >
+          {row.live && !expanded ? (
+            <ShimmeringWorkContent
+              environmentId={props.environmentId}
+              icon={icon}
+              iconSubtleColor={props.iconSubtleColor}
+              label={displayText}
+              showIcon
+              themeAppearance={props.themeAppearance}
+              toolIcon={toolIcon}
+            />
+          ) : (
+            <>
+              <WorkLogIconSlot>
+                {toolIcon ? (
+                  <ToolActivityIconView
+                    environmentId={props.environmentId}
+                    icon={toolIcon}
+                    fallback={icon}
+                    fallbackColor={props.iconSubtleColor}
+                    themeAppearance={props.themeAppearance}
+                  />
+                ) : (
+                  <WorkLogIcon
+                    icon={icon}
+                    color={props.iconSubtleColor}
+                    colorClassName={
+                      isUsageLimit
+                        ? "accent-warning-foreground"
+                        : iconIsDestructive
+                          ? "accent-adaptive-rose-600-400"
+                          : failed
+                            ? "accent-danger-foreground/40"
+                            : madeCommit
+                              ? "accent-adaptive-violet-600-400"
+                              : undefined
+                    }
+                  />
+                )}
+              </WorkLogIconSlot>
+              <WorkLogLabel
+                tone={
+                  isUsageLimit
+                    ? "warning"
+                    : iconIsDestructive
+                      ? "danger"
+                      : madeCommit
+                        ? "commit"
+                        : "default"
+                }
+              >
+                {fileAction && filePath !== null ? (
+                  <>
+                    {`${fileActionVerb(fileAction.kind)} `}
+                    {fileAction.fromPath === undefined
+                      ? null
+                      : `${formatPath(fileAction.fromPath)} → `}
+                    {filePath.slice(0, fileNameStart)}
+                    <Text className="text-foreground">{filePath.slice(fileNameStart)}</Text>
+                  </>
+                ) : (
+                  displayText
+                )}
+                {answerPreview ? (
+                  <Text
+                    className={
+                      !expanded &&
+                      row.workEntry.questionAnswer &&
+                      hasQuestionAnswer(row.workEntry.questionAnswer)
+                        ? "text-foreground"
+                        : "text-foreground-subtle"
+                    }
+                  >{`  ${answerPreview}`}</Text>
+                ) : null}
+              </WorkLogLabel>
+            </>
+          )}
 
-        <View className="shrink-0 flex-row items-center gap-px">
-          {fileStat ? (
-            <View className="flex-row items-center gap-1 pr-1">
-              {fileStat.additions === null ? null : (
-                <Text className="font-t3-medium text-xs tabular-nums text-adaptive-emerald-700-300">
-                  +{formatDiffCount(fileStat.additions)}
-                </Text>
-              )}
-              {fileStat.deletions === null ? null : (
-                <Text className="font-t3-medium text-xs tabular-nums text-adaptive-rose-700-300">
-                  −{formatDiffCount(fileStat.deletions)}
-                </Text>
-              )}
-            </View>
-          ) : null}
-          {props.copied ? (
-            <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">
-              Copied
-            </Text>
-          ) : null}
-          {failed && toolIcon !== undefined ? (
-            <View
-              className="h-4 w-4 items-center justify-center"
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-            >
-              <SymbolView
-                name="xmark"
-                size={11}
-                tintColorClassName="accent-danger-foreground/40"
-                type="monochrome"
-              />
-            </View>
-          ) : null}
-          <View className="h-4 w-4 items-center justify-center">
-            {canExpand ? (
-              <ThreadDisclosureChevron
-                expanded={expanded}
-                collapsedDirection="down"
-                size={11}
-                tintColor={props.iconSubtleColor}
-              />
+          <View className="shrink-0 flex-row items-center gap-px">
+            {fileStat ? (
+              <View className="flex-row items-center gap-1 pr-1">
+                {fileStat.additions === null ? null : (
+                  <Text className="font-t3-medium text-xs tabular-nums text-adaptive-emerald-700-300">
+                    +{formatDiffCount(fileStat.additions)}
+                  </Text>
+                )}
+                {fileStat.deletions === null ? null : (
+                  <Text className="font-t3-medium text-xs tabular-nums text-adaptive-rose-700-300">
+                    −{formatDiffCount(fileStat.deletions)}
+                  </Text>
+                )}
+              </View>
             ) : null}
+            {props.copied ? (
+              <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">
+                Copied
+              </Text>
+            ) : null}
+            {failed && toolIcon !== undefined ? (
+              <View
+                className="h-4 w-4 items-center justify-center"
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+              >
+                <SymbolView
+                  name="xmark"
+                  size={11}
+                  tintColorClassName="accent-danger-foreground/40"
+                  type="monochrome"
+                />
+              </View>
+            ) : null}
+            <View className="h-4 w-4 items-center justify-center">
+              {canExpand ? (
+                <ThreadDisclosureChevron
+                  expanded={expanded}
+                  collapsedDirection="down"
+                  size={11}
+                  tintColor={props.iconSubtleColor}
+                />
+              ) : null}
+            </View>
           </View>
-        </View>
-      </WorkLogPressable>
+        </WorkLogPressable>,
+      )}
 
       {expanded &&
       (reasoning ||

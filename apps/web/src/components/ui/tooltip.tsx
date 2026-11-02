@@ -100,11 +100,18 @@ function TooltipTrigger(props: TooltipPrimitive.Trigger.Props) {
   );
 }
 
-function TooltipPositioner(props: TooltipPrimitive.Positioner.Props) {
+function TooltipPositioner({
+  interactive,
+  ...props
+}: TooltipPrimitive.Positioner.Props & { interactive: boolean }) {
   const titlebarHeight = useNativeTitlebarHeight();
   return (
     <TooltipPrimitive.Positioner
-      className="pointer-events-none z-[140] max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none"
+      className={cn(
+        "z-[140] max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none",
+        // Click-through unless opted in, so a lingering tooltip never blocks the control under it.
+        !interactive && "pointer-events-none",
+      )}
       collisionPadding={{
         top: COLLISION_PADDING + titlebarHeight,
         right: COLLISION_PADDING,
@@ -123,6 +130,7 @@ function TooltipPopup({
   sideOffset = 4,
   side = "top",
   variant = "default",
+  interactive = false,
   anchor,
   children,
   ...props
@@ -131,11 +139,19 @@ function TooltipPopup({
   side?: TooltipPrimitive.Positioner.Props["side"];
   sideOffset?: TooltipPrimitive.Positioner.Props["sideOffset"];
   variant?: "default" | "glass" | "code";
+  /** The pointer can move onto the popup and select its text. */
+  interactive?: boolean;
   anchor?: TooltipPrimitive.Positioner.Props["anchor"];
 }) {
   return (
     <TooltipPrimitive.Portal>
-      <TooltipPositioner align={align} anchor={anchor} side={side} sideOffset={sideOffset}>
+      <TooltipPositioner
+        align={align}
+        anchor={anchor}
+        interactive={interactive}
+        side={side}
+        sideOffset={sideOffset}
+      >
         <TooltipPrimitive.Popup
           className={cn(
             "relative flex origin-(--transform-origin) text-balance rounded-md text-popover-foreground text-xs transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 data-instant:duration-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
@@ -145,6 +161,7 @@ function TooltipPopup({
             variant === "code"
               ? "max-w-120 wrap-anywhere text-left font-mono text-[11px] leading-relaxed"
               : "max-w-80 wrap-anywhere whitespace-normal leading-snug",
+            interactive && "cursor-text select-text",
             className,
           )}
           data-slot="tooltip-popup"

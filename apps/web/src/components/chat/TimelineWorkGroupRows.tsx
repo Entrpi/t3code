@@ -37,7 +37,7 @@ import {
   type TimelineWorkEntry,
   type TimelineRow,
 } from "./timelineRowContext";
-import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
+import { TimelineRowTimestamp, ActivityShimmerOverlay, CutOffTooltip } from "./TimelineRowParts";
 import {
   failedToolIconClassName,
   toolIconAcceptsTint,
@@ -659,17 +659,17 @@ function WorkGroupHeader(props: {
       label={
         stepsLabel ? (
           <span className="flex min-w-0 items-baseline gap-1.5">
-            <span className="truncate">
+            <CutOffTooltip className="truncate" text={props.label}>
               <WorkGroupSummaryText label={props.label} parts={props.parts} />
-            </span>
-            <span className="shrink-0 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+            </CutOffTooltip>
+            <span className="shrink-0 text-3xs font-medium uppercase tracking-wide text-muted-foreground group-hover/work-line:text-foreground/80">
               · {stepsLabel}
             </span>
           </span>
         ) : (
-          <span className="block truncate">
+          <CutOffTooltip className="block truncate" text={props.label}>
             <WorkGroupSummaryText label={props.label} parts={props.parts} />
-          </span>
+          </CutOffTooltip>
         )
       }
       trailing={

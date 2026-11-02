@@ -2339,6 +2339,10 @@ function renderFeedEntry(
       renderImage={props.renderViewedImage}
       renderReasoning={props.renderReasoning}
       onPressPreview={props.onPressPreview}
+      fileMenu={{
+        menu: props.markdownLinkHandlers.fileContextMenu,
+        onAction: props.markdownLinkHandlers.onFileContextMenuAction,
+      }}
     />
   );
 }

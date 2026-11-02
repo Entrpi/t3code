@@ -41,6 +41,34 @@ export function TimelineRowTimestamp({
   );
 }
 
+/** A truncated line's full text, offered only while the line is cut off. */
+export function CutOffTooltip(props: {
+  text: string;
+  code?: boolean;
+  className: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip
+      onOpenChange={(open, details) => {
+        const line = details.trigger;
+        if (open && line && line.scrollWidth <= line.clientWidth) details.cancel();
+      }}
+    >
+      <TooltipTrigger render={<span className={props.className} />}>
+        {props.children}
+      </TooltipTrigger>
+      <TooltipPopup
+        side="top"
+        variant={props.code ? "code" : "default"}
+        interactive={props.code === true}
+      >
+        {props.text}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function ActivityShimmerOverlay({ children }: { children: ReactNode }) {
   return (
     <span

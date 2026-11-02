@@ -505,7 +505,6 @@ function SubagentTimelineLink(props: {
   return (
     <Tooltip>
       <TooltipTrigger
-        delay={200}
         render={
           open === null ? (
             <div data-v2-item-type="subagent" aria-description={statusLabel} className={className}>
