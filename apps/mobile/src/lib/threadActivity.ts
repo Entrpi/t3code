@@ -36,7 +36,10 @@ import {
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
   toolGroupSummaryKind,
+  liveWorkGroupId,
+  workGroupExpanded,
   type ToolGroupSummaryKind,
+  type WorkLogDensity,
   type WorkLogPresentationEntry,
   type WorkLogToolLifecycleStatus,
 } from "@t3tools/client-runtime/work-log/presentation";
@@ -220,6 +223,8 @@ type ThreadFeedEntryContent =
       readonly runId: RunId | null;
       readonly groupId: string;
       readonly hiddenCount: number;
+      /** Compact density only, on settled groups. */
+      readonly steps?: number;
       readonly expanded: boolean;
       readonly summary: string;
       readonly summaryKind: ToolGroupSummaryKind;
@@ -343,6 +348,7 @@ const presentedActivityGroupsCache = new WeakMap<
     readonly activeRunId: RunId | null;
     readonly isWorking: boolean;
     readonly activeTail: boolean;
+    readonly density: WorkLogDensity;
     readonly rows: ReadonlyArray<ThreadFeedEntry>;
   }
 >();
@@ -1333,6 +1339,7 @@ interface ThreadFeedPresentationBuild {
   readonly expandedWorkGroupIds: ReadonlySet<string>;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive: boolean;
+  readonly density: WorkLogDensity;
   readonly rows: ReadonlyArray<ThreadFeedEntry>;
   /** Feed entry `entry` is a user message whose rows start at `rowsLength`. */
   readonly restarts: ReadonlyArray<{ readonly entry: number; readonly rowsLength: number }>;
@@ -1375,9 +1382,11 @@ function presentationRestart(
   expandedWorkGroupIds: ReadonlySet<string>,
   activeWorkStartedAt: string | null,
   runlessWorkActive: boolean,
+  density: WorkLogDensity,
 ): { readonly entry: number; readonly rowsLength: number; readonly index: number } | null {
   if (
     previous === null ||
+    previous.density !== density ||
     !latestRunsEqual(previous.latestRun, latestRun) ||
     previous.activeWorkStartedAt !== activeWorkStartedAt ||
     previous.runlessWorkActive !== runlessWorkActive ||
@@ -1407,6 +1416,7 @@ export function deriveThreadFeedPresentation(
   activeWorkStartedAt: string | null = null,
   runlessWorkActive = false,
   cache?: ThreadFeedCache,
+  density: WorkLogDensity = "standard",
 ): ThreadFeedEntry[] {
   const previous = cache?.presentation ?? null;
   const restart = presentationRestart(
@@ -1417,6 +1427,7 @@ export function deriveThreadFeedPresentation(
     expandedWorkGroupIds,
     activeWorkStartedAt,
     runlessWorkActive,
+    density,
   );
   const start = restart?.entry ?? 0;
   const result: ThreadFeedEntry[] =
@@ -1566,6 +1577,7 @@ export function deriveThreadFeedPresentation(
         activeRunId,
         isWorking,
         isActiveTailGroup,
+        density,
       );
     }
   }
@@ -1657,6 +1669,7 @@ export function deriveThreadFeedPresentation(
       expandedWorkGroupIds,
       activeWorkStartedAt,
       runlessWorkActive,
+      density,
       rows: result,
       restarts: cleanRestarts,
       firstEntryByRun,
@@ -1700,6 +1713,7 @@ function appendPresentedFeedEntry(
   activeRunId: RunId | null,
   isWorking: boolean,
   activeTail: boolean,
+  density: WorkLogDensity,
 ): void {
   if (entry.type !== "activity-group") {
     result.push(entry);
@@ -1721,13 +1735,24 @@ function appendPresentedFeedEntry(
     cached.activeRunId !== activeRunId ||
     cached.isWorking !== isWorking ||
     cached.activeTail !== activeTail ||
+    cached.density !== density ||
     cached.rows.some(
-      (row) => row.type === "work-toggle" && expandedWorkGroupIds.has(row.groupId) !== row.expanded,
+      (row) =>
+        row.type === "work-toggle" &&
+        workGroupExpanded(row.groupId, expandedWorkGroupIds) !== row.expanded,
     )
   ) {
     const rows: ThreadFeedEntry[] = [];
-    appendActivityGroupRows(rows, entry, expandedWorkGroupIds, activeRunId, isWorking, activeTail);
-    cached = { activeRunId, isWorking, activeTail, rows };
+    appendActivityGroupRows(
+      rows,
+      entry,
+      expandedWorkGroupIds,
+      activeRunId,
+      isWorking,
+      activeTail,
+      density,
+    );
+    cached = { activeRunId, isWorking, activeTail, density, rows };
     presentedActivityGroupsCache.set(entry, cached);
   }
   for (const row of cached.rows) {
@@ -1742,6 +1767,7 @@ function appendActivityGroupRows(
   activeRunId: RunId | null,
   isWorking: boolean,
   activeTail: boolean,
+  density: WorkLogDensity,
 ): void {
   const groupAnchorIdByActivityId = new Map<string, string>();
   let groupAnchorId: string | null = null;
@@ -1775,6 +1801,7 @@ function appendActivityGroupRows(
       activeRunId,
       isWorking,
       activeTail && isTrailingRun,
+      density,
     );
     groupableRun = [];
   };
@@ -1801,13 +1828,13 @@ function appendToolGroupRows(
   result: ThreadFeedEntry[],
   sourceGroup: Extract<ThreadFeedEntry, { readonly type: "activity-group" }>,
   activities: ReadonlyArray<ThreadFeedActivity>,
-  groupId: string,
+  anchorGroupId: string,
   expandedWorkGroupIds: ReadonlySet<string>,
   activeRunId: RunId | null,
   isWorking: boolean,
   activeTail: boolean,
+  density: WorkLogDensity,
 ): void {
-  const expanded = expandedWorkGroupIds.has(groupId);
   const latestActiveActivity = activities.findLast(
     (activity) =>
       isWorking && activity.lifecycleStatus === "inProgress" && activity.runId === activeRunId,
@@ -1817,7 +1844,16 @@ function appendToolGroupRows(
   const latestActivity = latestActiveActivity ?? activities.at(-1)!;
   const shimmer = activeTail && (active || latestActivity.status === "success");
   const singleActivity = activities.length === 1 ? latestActivity : null;
-  const groupSummary = summarizeToolGroup(activities.map((activity) => activity.workEntry));
+  const loneCall = singleActivity !== null && singleActivity.workEntry.itemType !== "reasoning";
+  const groupId =
+    density === "compact" && activeTail && !loneCall
+      ? liveWorkGroupId(anchorGroupId)
+      : anchorGroupId;
+  const expanded = workGroupExpanded(groupId, expandedWorkGroupIds);
+  const groupSummary = summarizeToolGroup(
+    activities.map((activity) => activity.workEntry),
+    density,
+  );
   const latestThought =
     live && !expanded
       ? activities.findLast(
@@ -1842,7 +1878,7 @@ function appendToolGroupRows(
         : groupSummary.summary;
   const id = shimmer ? LIVE_ACTIVITY_ROW_ID : `${live ? "work-live" : "work-toggle"}:${groupId}`;
   // Lone calls replace the header and disclose directly; lone thoughts retain the header to show text on expansion.
-  if (singleActivity !== null && singleActivity.workEntry.itemType !== "reasoning") {
+  if (loneCall) {
     result.push({
       type: "activity-group",
       id,
@@ -1894,6 +1930,9 @@ function appendToolGroupRows(
     runId: sourceGroup.runId,
     groupId,
     hiddenCount: activities.length,
+    ...(density === "compact" && !live && groupSummary.steps > 0
+      ? { steps: groupSummary.steps }
+      : {}),
     expanded,
     summary,
     summaryKind: toolGroupSummaryKind(

@@ -1376,6 +1376,7 @@ export function ThreadWorkGroupToggle(props: {
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly expanded: boolean;
   readonly hiddenCount: number;
+  readonly steps?: number | undefined;
   readonly iconSubtleColor: import("react-native").ColorValue;
   readonly summary: string;
   readonly summaryKind: ToolGroupSummaryKind;
@@ -1389,7 +1390,10 @@ export function ThreadWorkGroupToggle(props: {
   readonly trailing?: ReactNode;
   readonly onToggle: () => void;
 }) {
-  const statusLabel = props.hasFailure ? `${props.summary}, tool call failed` : props.summary;
+  const stepsLabel =
+    props.steps === undefined ? "" : `${props.steps} ${props.steps === 1 ? "step" : "steps"}`;
+  const summaryLabel = stepsLabel ? `${props.summary}, ${stepsLabel}` : props.summary;
+  const statusLabel = props.hasFailure ? `${summaryLabel}, tool call failed` : summaryLabel;
   const accessibilityLabel = props.thought ? `${props.thought} ${statusLabel}` : statusLabel;
   const icon =
     props.summaryToolIcon ??
@@ -1455,6 +1459,14 @@ export function ThreadWorkGroupToggle(props: {
                   />
                 </WorkLogIconSlot>
                 <WorkLogLabel key={props.rowSizing.textSizeKey}>{props.summary}</WorkLogLabel>
+                {stepsLabel ? (
+                  <Text
+                    selectable={false}
+                    className="shrink-0 font-t3-bold text-3xs uppercase tracking-[0.8px] text-foreground-muted"
+                  >
+                    {stepsLabel}
+                  </Text>
+                ) : null}
               </>
             )}
             <ThreadDisclosureChevron

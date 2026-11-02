@@ -2435,6 +2435,60 @@ describe("deriveMessagesTimelineRows", () => {
     expect(declinedRows.filter((row) => row.id === "live-activity-row")).toHaveLength(1);
   });
 
+  it("in Compact, keeps the running stage open and folds it with a step count once settled", () => {
+    const runId = RunId.make("turn-stage");
+    const work = (id: string, command: string, second: number) => ({
+      id: `${id}-entry`,
+      kind: "work" as const,
+      createdAt: `2026-01-01T00:00:0${second}Z`,
+      entry: {
+        id,
+        createdAt: `2026-01-01T00:00:0${second}Z`,
+        runId,
+        label: `Ran ${command}`,
+        command,
+        tone: "tool" as const,
+        itemType: "command_execution" as const,
+        toolLifecycleStatus: "completed" as const,
+      },
+    });
+    const deriveRows = (running: boolean, expandedWorkGroupIds?: ReadonlySet<string>) =>
+      deriveMessagesTimelineRows({
+        ...(expandedWorkGroupIds ? { expandedWorkGroupIds } : {}),
+        workLogDensity: "compact",
+        timelineEntries: [work("pwd", "pwd", 1), work("ls", "ls", 2)],
+        latestRun: {
+          runId,
+          status: running ? "running" : "completed",
+          startedAt: "2026-01-01T00:00:00Z",
+          completedAt: running ? null : "2026-01-01T00:00:03Z",
+        },
+        expandedRunIds: new Set([runId]),
+        isWorking: running,
+        activeTurnStartedAt: running ? "2026-01-01T00:00:00Z" : null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+
+    const live = deriveRows(true);
+    const liveRow = live.find((row) => row.kind === "work-live");
+    expect(liveRow).toMatchObject({ expanded: true });
+    expect(live.at(-1)).toMatchObject({
+      kind: "work",
+      isExpandedToolGroup: true,
+      groupedEntries: [{ id: "pwd" }, { id: "ls" }],
+    });
+    const closed = new Set([liveRow?.kind === "work-live" ? liveRow.groupId : ""]);
+    expect(deriveRows(true, closed).find((row) => row.kind === "work-live")).toMatchObject({
+      expanded: false,
+    });
+    expect(deriveRows(false, closed).find((row) => row.kind === "work-toggle")).toMatchObject({
+      expanded: false,
+      steps: 2,
+      summary: "Ran 2 commands",
+    });
+  });
+
   it("does not fold the session's running turn when latestRun regresses", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

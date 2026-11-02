@@ -3,8 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+import type { FileActionKind } from "./fileActions.ts";
 import {
   resolveWorkEntryToolPresentation,
+  summarizeToolGroup,
   toolItemForDisplay,
   type WorkLogPresentationEntry,
   workEntryIndicatesToolFailure,
@@ -202,5 +204,90 @@ describe("resolveWorkEntryToolPresentation", () => {
         toolData: { server: "another-server", tool: "preview_click" },
       }),
     ).toBeNull();
+  });
+});
+
+describe("summarizeToolGroup", () => {
+  let next = 0;
+  const entry = (fields: Partial<WorkLogPresentationEntry>): WorkLogPresentationEntry => ({
+    id: `e${(next += 1)}`,
+    createdAt: "2026-11-02T00:00:00.000Z",
+    label: "Tool",
+    tone: "tool",
+    toolLifecycleStatus: "completed",
+    ...fields,
+  });
+  const file = (kind: FileActionKind, path: string) =>
+    entry({
+      itemType: "file_change",
+      label: `${kind} ${path}`,
+      fileAction: { kind, path, exact: true },
+    });
+  const command = (input: string) => entry({ itemType: "command_execution", command: input });
+  const read = (...paths: string[]) =>
+    entry({
+      itemType: "command_execution",
+      command: `cat ${paths.join(" ")}`,
+      commandAction: { kind: "read", paths },
+    });
+  const search = () =>
+    entry({
+      itemType: "command_execution",
+      command: "rg x",
+      commandAction: { kind: "search", query: "x" },
+    });
+  const plan = () => entry({ itemType: "todo_list", tone: "info", label: "Tasks 1/3" });
+  const thought = () => entry({ itemType: "reasoning", tone: "thinking", detail: "hmm" });
+
+  it.each([
+    [
+      [read("a.ts"), read("b.ts"), command("vp test run")],
+      "Inspected 2 files and ran 1 command",
+      3,
+    ],
+    [[file("create", "a.ts")], "Created 1 file", 1],
+    [
+      [
+        file("create", "a.ts"),
+        file("create", "b.ts"),
+        file("create", "c.ts"),
+        file("delete", "d.ts"),
+      ],
+      "Created 3 files and deleted 1 file",
+      4,
+    ],
+    [
+      [file("edit", "a.ts"), file("delete", "b.ts"), command("vp test run")],
+      "Edited 1 file, deleted 1 file, and ran 1 command",
+      3,
+    ],
+    [
+      [
+        search(),
+        read("a.ts", "b.ts"),
+        file("move", "c.ts"),
+        file("write", "d.ts"),
+        plan(),
+        command("ls"),
+      ],
+      "Searched code 1 time, inspected 2 files, moved 1 file, wrote 1 file, updated the plan, and ran 1 command",
+      6,
+    ],
+    [
+      [file("edit", "a.ts"), file("edit", "a.ts"), thought(), entry({ label: "Tool call" })],
+      "Edited 1 file and used 1 tool",
+      3,
+    ],
+  ] as const)("names every action in Compact: %#", (entries, summary, steps) => {
+    expect(summarizeToolGroup(entries, "compact")).toMatchObject({ summary, steps });
+  });
+
+  it("keeps two categories in Standard, with file verbs and a named plan update", () => {
+    expect(
+      summarizeToolGroup([file("create", "a.ts"), plan(), read("b.ts"), command("ls")]).summary,
+    ).toBe("Created 1 file, ran 1 command, and performed 2 other actions");
+    expect(summarizeToolGroup([plan(), read("b.ts")]).summary).toBe(
+      "Updated the plan and read 1 file",
+    );
   });
 });
