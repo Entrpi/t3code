@@ -154,7 +154,7 @@ export async function startFanoutThread(input: {
  * error to show; on error the draft is untouched.
  */
 /** Puts a rewound message's files back into a draft; images get fresh preview URLs. */
-export function addRestoredAttachmentsToDraft(
+function addRestoredAttachmentsToDraft(
   draftTarget: ScopedThreadRef | DraftId,
   restored: ReadonlyArray<{ readonly file: File; readonly type: "image" | "file" }>,
 ) {

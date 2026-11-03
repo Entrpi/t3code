@@ -163,9 +163,12 @@ export function InlinePromptEditor(props: {
     setSaving(true);
     savingRef.current = true;
     setError(null);
-    // On success the rewind removes this message, and this editor with it.
+    // Null means the edit left this editor: it was sent, or it waits in the queue.
     const failure = await props.onSave(prompt, { kept, added });
-    if (failure === null) return;
+    if (failure === null) {
+      props.onCancel();
+      return;
+    }
     savingRef.current = false;
     setSaving(false);
     setError(failure);

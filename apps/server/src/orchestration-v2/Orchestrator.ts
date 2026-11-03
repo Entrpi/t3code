@@ -5500,6 +5500,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    options: { readonly park?: boolean } = {},
   ) {
     let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
     if (command.manualContinuationOfRunId !== undefined) {
@@ -5982,13 +5983,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projection.thread.worktreePath === null
         ? latestRun
         : undefined;
-    const queueBehindRun = activeRun ?? worktreeMissingRun;
+    // A rewind's edit that could not be sent waits, held, at the front of the queue.
+    const queueBehindRun =
+      activeRun ?? worktreeMissingRun ?? (options.park === true ? latestRun : null) ?? undefined;
     const pendingMergeBackTransfers = pendingMergeBackTransfersForThread(projection);
     const startsOrQueuesRun =
       dispatchMode.type === "defer_start" ||
       dispatchMode.type === "start_immediately" ||
       dispatchMode.type === "queue_after_active";
     const shouldQueue = queueBehindRun !== undefined && startsOrQueuesRun;
+    if (options.park === true && !shouldQueue) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} has no run to hold the message behind.`,
+      });
+    }
     // Client messages resume held queues; server continuations and scheduled tasks do not.
     // Provider failure or usage limits re-hold the queue.
     const worktreeSetupUnresolved = worktreeSetupPending(projection);
@@ -5997,7 +6007,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (command.creationSource === "web" || command.creationSource === "mobile") &&
       command.scheduledTaskId === undefined;
     const heldRunsToRelease =
-      sentByUserFromClient && startsOrQueuesRun && !worktreeSetupUnresolved
+      sentByUserFromClient && startsOrQueuesRun && !worktreeSetupUnresolved && options.park !== true
         ? projection.runs.filter((run) => run.status === "queued" && run.queueHeld === true)
         : [];
     const releasedAt = yield* DateTime.now;
@@ -6134,12 +6144,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         rootNodeId,
         activeAttemptId: attemptId,
         status: "queued",
-        ...(worktreeMissingRun !== undefined ||
+        ...(options.park === true ||
+        worktreeMissingRun !== undefined ||
         (heldRunsToRelease.length === 0 && queueIsHeld && !wakeSkipsHold)
           ? { queueHeld: true }
           : {}),
         queuePosition:
-          goalStopRunId !== undefined
+          goalStopRunId !== undefined || options.park === true
             ? 1
             : Math.max(
                 0,
@@ -12224,6 +12235,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         { readonly type: "checkpoint.rollback.fail" }
       >,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
       const thread = yield* projectionStore
         .getThread(command.threadId)
@@ -12251,6 +12263,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           updatedAt: now,
         },
       });
+      const followUp = command.followUp;
+      if (
+        followUp === undefined ||
+        (yield* getProjectionWithPendingEvents(command.threadId, events)).messages.some(
+          (message) => message.id === followUp.messageId,
+        )
+      )
+        return;
+      // The failure must commit even when the edit cannot be parked, so a failed park's partial
+      // events are dropped.
+      const parkEvents = yield* Ref.make(yield* Ref.get(events));
+      const parkEffects = yield* Ref.make(yield* Ref.get(effects));
+      const parked = yield* Effect.exit(
+        dispatchMessage(
+          {
+            type: "message.dispatch",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            ...followUp,
+            dispatchMode: { type: "queue_after_active" },
+          },
+          parkEvents,
+          parkEffects,
+          { park: true },
+        ),
+      );
+      if (Exit.isSuccess(parked)) {
+        yield* Ref.set(events, yield* Ref.get(parkEvents));
+        yield* Ref.set(effects, yield* Ref.get(parkEffects));
+      } else {
+        yield* Effect.logWarning("A failed rewind could not park its edited message", {
+          threadId: command.threadId,
+          cause: parked.cause,
+        });
+      }
     },
   );
 
@@ -13480,7 +13527,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchCheckpointRollback(command, events, effects);
         break;
       case "checkpoint.rollback.fail":
-        yield* dispatchCheckpointRollbackFail(command, events);
+        yield* dispatchCheckpointRollbackFail(command, events, effects);
         break;
       case "runtime-request.delivery.fail":
         yield* dispatchRuntimeRequestDeliveryFail(command, events);

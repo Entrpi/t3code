@@ -484,6 +484,7 @@ export const layerExecutor: Layer.Layer<
                         commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
                         threadId: effect.threadId,
                         requestId: effect.commandId,
+                        ...(followUp === undefined ? {} : { followUp }),
                         message: Option.match(Cause.findErrorOption(cause), {
                           onNone: () => CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
                           onSome: (error) =>
