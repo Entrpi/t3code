@@ -9,6 +9,7 @@ import {
   CheckpointScopeId,
   MessageId,
   type ModelSelection,
+  type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2TurnItem,
   type OrchestrationV2ThreadHistoryPage,
@@ -33,6 +34,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
@@ -7617,6 +7619,160 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           ["local", targetThreadId, "command_execution"],
           ["local", targetThreadId, "command_execution"],
         ],
+      );
+    }),
+  );
+
+  it.effect("a fork made after a rewind inherits only the turns its source kept", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const projectId = ProjectId.make("project:fork-after-rewind");
+      const sourceThreadId = ThreadId.make("thread:fork-after-rewind:source");
+      const forkThreadId = ThreadId.make("thread:fork-after-rewind:fork");
+      const sourceProviderThreadId = ProviderThreadId.make("provider-thread:fork-after-rewind");
+      const runId = (ordinal: number) => RunId.make(`run:fork-after-rewind:${ordinal}`);
+      const thread = (input: {
+        readonly id: ThreadId;
+        readonly lineage: OrchestrationV2AppThread["lineage"];
+        readonly forkedFrom: OrchestrationV2AppThread["forkedFrom"];
+        readonly now: DateTime.Utc;
+      }) =>
+        projectionStore.apply({
+          id: EventId.make(`event:fork-after-rewind:${input.id}`),
+          type: "thread.created",
+          threadId: input.id,
+          occurredAt: input.now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: input.id,
+            projectId,
+            title: "Fork after rewind",
+            providerInstanceId,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: sourceProviderThreadId,
+            lineage: input.lineage,
+            forkedFrom: input.forkedFrom,
+            createdAt: input.now,
+            updatedAt: input.now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        });
+      const run = (ordinal: number, status: "completed" | "rolled_back") =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          yield* projectionStore.apply({
+            id: EventId.make(`event:fork-after-rewind:run-${ordinal}:${status}`),
+            type: "run.updated",
+            threadId: sourceThreadId,
+            runId: runId(ordinal),
+            driver,
+            occurredAt: now,
+            payload: {
+              id: runId(ordinal),
+              threadId: sourceThreadId,
+              ordinal,
+              providerInstanceId,
+              modelSelection,
+              providerThreadId: sourceProviderThreadId,
+              userMessageId: MessageId.make(`message:fork-after-rewind:${ordinal}`),
+              rootNodeId: null,
+              activeAttemptId: null,
+              status,
+              requestedAt: now,
+              startedAt: now,
+              completedAt: now,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          });
+          if (status === "rolled_back") return;
+          yield* projectionStore.apply({
+            id: EventId.make(`event:fork-after-rewind:prompt-${ordinal}`),
+            type: "turn-item.updated",
+            threadId: sourceThreadId,
+            runId: runId(ordinal),
+            driver,
+            occurredAt: now,
+            payload: {
+              createdBy: "user",
+              creationSource: "web",
+              id: TurnItemId.make(`turn-item:fork-after-rewind:${ordinal}`),
+              threadId: sourceThreadId,
+              runId: runId(ordinal),
+              nodeId: null,
+              providerThreadId: sourceProviderThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: ordinal * 100,
+              status: "completed",
+              title: null,
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              type: "user_message",
+              messageId: MessageId.make(`message:fork-after-rewind:${ordinal}`),
+              inputIntent: "turn_start",
+              text: `prompt ${ordinal}`,
+              attachments: [],
+            },
+          });
+        });
+
+      yield* thread({
+        id: sourceThreadId,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: sourceThreadId },
+        forkedFrom: null,
+        now: yield* DateTime.now,
+      });
+      yield* run(1, "completed");
+      yield* run(2, "completed");
+      yield* TestClock.adjust("1 second");
+      // Edit from here on prompt 2, then a new turn.
+      yield* run(2, "rolled_back");
+      yield* TestClock.adjust("1 second");
+      yield* run(3, "completed");
+      yield* TestClock.adjust("1 second");
+      yield* thread({
+        id: forkThreadId,
+        lineage: {
+          parentThreadId: sourceThreadId,
+          relationshipToParent: "fork",
+          rootThreadId: sourceThreadId,
+        },
+        forkedFrom: { type: "run", threadId: sourceThreadId, runId: runId(3) },
+        now: yield* DateTime.now,
+      });
+
+      const fork = yield* projectionStore.getThreadProjection(forkThreadId);
+      const prompts = fork.visibleTurnItems.flatMap((row) =>
+        row.item.type === "user_message" ? [row.item.text] : [],
+      );
+      assert.deepEqual(prompts, ["prompt 1", "prompt 3"]);
+      assert.equal(
+        (yield* projectionStore.getThreadShell(forkThreadId))?.visibleItemCount,
+        fork.visibleTurnItems.length,
+      );
+      assert.deepEqual(
+        (yield* projectionStore.getTimelinePage(forkThreadId, { view: "activity", limit: 10 }))
+          .items,
+        fork.visibleTurnItems,
+      );
+      const window = yield* projectionStore.getThreadSnapshotWindow(forkThreadId, { rowLimit: 2 });
+      assert.deepEqual(
+        window.projection.visibleTurnItems.flatMap((row) =>
+          row.item.type === "user_message" ? [row.item.text] : [],
+        ),
+        ["prompt 1", "prompt 3"],
       );
     }),
   );
