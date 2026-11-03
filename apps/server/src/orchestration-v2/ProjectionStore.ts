@@ -444,7 +444,8 @@ export interface ProjectionStoreV2Shape {
   readonly searchThread: (
     input: OrchestrationV2SearchThreadInput,
   ) => Effect.Effect<OrchestrationV2SearchThreadResult, ProjectionStoreV2Error>;
-  readonly getThreadAttachmentIds: (
+  /** Files the thread's rows hold that no live thread shows once it is deleted, ancestors' included. */
+  readonly getAttachmentIdsReleasedByDeletion: (
     threadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<string>, ProjectionStoreV2Error>;
   readonly getThreadHistoryPage: (
@@ -5440,7 +5441,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.mapError(controlReadError(threadId)),
       );
 
-    const getThreadAttachmentIds: ProjectionStoreV2Shape["getThreadAttachmentIds"] = (threadId) =>
+    const ownAttachmentIds = (threadId: ThreadId) =>
       Effect.all([
         sql<{ id: string }>`
       SELECT DISTINCT json_extract(attachment.value, '$.id') AS id
@@ -5492,6 +5493,50 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ]),
         Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
       );
+
+    // Forks read their source's rows, so a thread's files stay while a live fork can show them,
+    // and go with the last thread that could. A fork from an early run keeps later files too.
+    const getAttachmentIdsReleasedByDeletion = Effect.fn(
+      "ProjectionStore.getAttachmentIdsReleasedByDeletion",
+    )(function* (threadId: ThreadId) {
+      const family = yield* sql<{
+        readonly thread_id: ThreadId;
+        readonly deleted_at: string | null;
+        readonly source_thread_id: ThreadId | null;
+      }>`
+        SELECT thread_id, deleted_at,
+          CASE WHEN json_extract(payload_json, '$.forkedFrom.type') = 'run'
+            AND json_extract(payload_json, '$.lineage.sideChat') IS NOT 1
+          THEN json_extract(payload_json, '$.forkedFrom.threadId') END AS source_thread_id
+        FROM orchestration_v2_projection_threads
+        WHERE json_extract(payload_json, '$.lineage.rootThreadId') = (
+          SELECT json_extract(payload_json, '$.lineage.rootThreadId')
+          FROM orchestration_v2_projection_threads
+          WHERE thread_id = ${threadId}
+        )
+      `.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
+      const sourceOf = new Map(family.map((row) => [row.thread_id, row.source_thread_id]));
+      const sources = (descendant: ThreadId) => {
+        const chain = new Set<ThreadId>();
+        for (let id = sourceOf.get(descendant); id && !chain.has(id); id = sourceOf.get(id)) {
+          chain.add(id);
+        }
+        return chain;
+      };
+      const liveReaders = family
+        .filter((row) => row.deleted_at === null && row.thread_id !== threadId)
+        .map((row) => sources(row.thread_id));
+      const released: Array<ThreadId> = [];
+      for (const id of [threadId, ...sources(threadId)]) {
+        const live = family.some(
+          (row) => row.thread_id === id && row.deleted_at === null && id !== threadId,
+        );
+        if (live || liveReaders.some((chain) => chain.has(id))) break;
+        released.push(id);
+      }
+      const ids = yield* Effect.forEach(released, ownAttachmentIds);
+      return [...new Set(ids.flat())];
+    });
 
     const getThreadRecords: ProjectionStoreV2Shape["getThreadRecords"] = (
       threadId,
@@ -7192,7 +7237,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThreadHistoryPage: readOnReader(getThreadHistoryPage),
       searchThread: readOnReader(searchThread),
       searchThreadStream,
-      getThreadAttachmentIds: readOnReader(getThreadAttachmentIds),
+      getAttachmentIdsReleasedByDeletion: readOnReader(getAttachmentIdsReleasedByDeletion),
     } satisfies ProjectionStoreV2Shape;
   }),
 );

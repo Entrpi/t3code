@@ -258,11 +258,13 @@ it.effect.each(["sqlite"] as const)(
         (yield* store.getThreadRecords(threadId, ["turnItems"], { turnItemRunIds: [] })).turnItems,
         [],
       );
-      assert.deepEqual(yield* store.getThreadAttachmentIds(threadId), []);
+      assert.deepEqual(yield* store.getAttachmentIdsReleasedByDeletion(threadId), []);
       if (storage === "sqlite") {
         const sql = yield* SqlClient.SqlClient;
         yield* sql`UPDATE orchestration_v2_projection_messages SET payload_json = json_object('text', ${"x".repeat(512_000)}, 'attachments', json_array(json_object('id', 'attachment:old'))) WHERE message_id = 'obsolete-history'`;
-        assert.deepEqual(yield* store.getThreadAttachmentIds(threadId), ["attachment:old"]);
+        assert.deepEqual(yield* store.getAttachmentIdsReleasedByDeletion(threadId), [
+          "attachment:old",
+        ]);
       }
       const page = yield* store.getTimelinePage(threadId, { view: "activity", limit: 1 });
       assert.deepEqual(
@@ -406,7 +408,7 @@ it.effect.each(["sqlite"] as const)(
           },
         },
       });
-      assert.deepEqual((yield* store.getThreadAttachmentIds(threadId)).toSorted(), [
+      assert.deepEqual((yield* store.getAttachmentIdsReleasedByDeletion(threadId)).toSorted(), [
         "answer-document",
         "answer-image",
         "attachment:old",

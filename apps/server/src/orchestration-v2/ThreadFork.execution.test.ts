@@ -19,6 +19,8 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -29,6 +31,7 @@ import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const forkCases = (
@@ -56,7 +59,7 @@ const forkCases = (
     { runEffectWorker: false },
   );
 
-  return { driver, status, instanceId, modelSelection, layer };
+  return { driver, status, instanceId, modelSelection, adapter, layer };
 });
 
 it.effect("a persisted fork leaves PR watching with its parent until explicitly opted in", () =>
@@ -1034,6 +1037,103 @@ it.effect("closing a side chat deletes it only while unused; a deleted parent ta
     ).pipe(Effect.flip);
     assert.include(String(orphan.cause), "was deleted");
   }).pipe(Effect.provide(forkCases[0]!.layer)),
+);
+
+// Shared with the harness so the test can read the effects a command queued.
+const layerOutboxDatabase = SqlitePersistence.layerMemory;
+
+it.effect("a deleted source keeps the attachments its live forks still show", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const sql = yield* SqlClient.SqlClient;
+    const now = yield* DateTime.now;
+    const sourceId = ThreadId.make("fork-attachments-source");
+    const sourceRunId = RunId.make("fork-attachments-source-run");
+    const forkId = ThreadId.make("fork-attachments-fork");
+    yield* createParent(sourceId);
+    yield* writeParentRun({
+      threadId: sourceId,
+      runId: sourceRunId,
+      ordinal: 1,
+      status: "completed",
+      text: "Look at this screenshot",
+      stable: true,
+    });
+    yield* eventSink.write({
+      events: [
+        {
+          id: EventId.make("fork-attachments-source-message"),
+          type: "message.updated",
+          threadId: sourceId,
+          runId: sourceRunId,
+          occurredAt: now,
+          payload: {
+            id: MessageId.make(`${sourceRunId}:message`),
+            threadId: sourceId,
+            runId: sourceRunId,
+            nodeId: null,
+            role: "user",
+            text: "Look at this screenshot",
+            attachments: [
+              {
+                type: "image",
+                id: "fork-attachments-screenshot",
+                name: "screenshot.png",
+                mimeType: "image/png",
+                sizeBytes: 10,
+              },
+            ],
+            streaming: false,
+            createdBy: "user",
+            creationSource: "web",
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      ],
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.fork",
+      commandId: CommandId.make("fork-attachments-fork"),
+      sourceThreadId: sourceId,
+      targetThreadId: forkId,
+      sourcePoint: { type: "run", runId: sourceRunId },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const deleteAndListCleanup = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const commandId = CommandId.make(`fork-attachments-delete:${threadId}`);
+        yield* orchestrator.dispatch({ type: "thread.delete", commandId, threadId });
+        const rows = yield* sql<{ readonly payload_json: string }>`
+          SELECT payload_json FROM orchestration_v2_effect_outbox
+          WHERE command_id = ${commandId} AND effect_type = 'attachment.cleanup'
+        `;
+        return rows.flatMap((row) => JSON.parse(row.payload_json).attachmentIds);
+      });
+
+    assert.deepEqual(yield* deleteAndListCleanup(sourceId), []);
+    const fork = yield* orchestrator.getThreadProjection(forkId);
+    assert.deepEqual(
+      fork.visibleTurnItems.flatMap((row) =>
+        row.item.type === "user_message" ? [[row.visibility, row.item.text]] : [],
+      ),
+      [["inherited", "Look at this screenshot"]],
+    );
+    assert.deepEqual(yield* deleteAndListCleanup(forkId), ["fork-attachments-screenshot"]);
+  }).pipe(
+    Effect.provide(
+      Layer.merge(
+        layerOutboxDatabase,
+        ProviderReplayHarness.layerWithRegistry(
+          { name: "fork-attachments" },
+          ProviderAdapterRegistry.layerFromAdapters([forkCases[0]!.adapter]),
+          { databaseLayer: layerOutboxDatabase, runEffectWorker: false },
+        ),
+      ),
+    ),
+  ),
 );
 
 it.effect("a side chat opened during the parent's first turn starts from a digest", () =>
