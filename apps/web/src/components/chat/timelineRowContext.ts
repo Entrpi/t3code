@@ -111,6 +111,8 @@ export interface TimelineRowSharedState {
 
 export interface TimelineRowActivityState {
   isWorking: boolean;
+  /** Edit and Fork branch from a finished exchange, so they wait for this. */
+  latestExchangeSettled: boolean;
   isCompacting: boolean;
   isRevertingCheckpoint: boolean;
   awaitingUser: boolean;

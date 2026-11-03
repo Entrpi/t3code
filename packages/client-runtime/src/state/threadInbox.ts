@@ -1,4 +1,6 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
 import { effectiveSnoozed } from "./threadSettled.ts";
@@ -28,6 +30,29 @@ export function isThreadWorking(thread: WorkingThreadInput): boolean {
     run.status !== "waiting" &&
     thread.runtime?.activeRunId !== run.runId;
   return !(thread.interactionMode === "plan" && thread.hasActionableProposedPlan && runSettled);
+}
+
+/**
+ * The latest exchange is over: no run is live, nothing waits on the user, and no background work
+ * holds the turn open. Actions that branch from a turn wait for this.
+ */
+export function isLatestExchangeSettled(
+  thread: Pick<
+    EnvironmentThreadShell,
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "pendingSubagentRequest"
+    | "pendingBackgroundTasks"
+    | "runtime"
+  >,
+): boolean {
+  return (
+    !thread.hasPendingApprovals &&
+    !thread.hasPendingUserInput &&
+    thread.pendingSubagentRequest == null &&
+    !threadRuntimeIsActive(thread.runtime) &&
+    !backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks)
+  );
 }
 
 type InboxThreadInput = Pick<

@@ -12,6 +12,7 @@ import * as Dialog from "../../components/ui/Dialog";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entities";
 import { createThreadVisitTracker } from "@t3tools/client-runtime/state/thread-visits";
+import { isLatestExchangeSettled } from "@t3tools/client-runtime/state/thread-inbox";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { ChatGptUsageLimitNotice } from "./ChatGptUsageLimitNotice";
@@ -1455,6 +1456,7 @@ function ThreadDetailBody(
                 onEditPendingMessage={
                   isProviderSubagent || pendingMessageEditBlocked ? null : handleEditPendingMessage
                 }
+                latestExchangeSettled={isLatestExchangeSettled(props.selectedThread)}
                 contentPresentation={props.contentPresentation}
                 threadTitle={props.selectedThread.title}
                 latestRun={props.activityRun}
