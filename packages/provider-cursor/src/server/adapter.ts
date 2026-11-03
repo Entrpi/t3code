@@ -85,7 +85,7 @@ export const CursorProviderCapabilitiesV2 = {
   threads: {
     canCreateEmptyThread: true,
     canReadThreadSnapshot: true,
-    canRollbackThread: false,
+    canRollbackThread: true,
     canForkThread: false,
     canForkFromTurn: false,
     canForkFromSubagentThread: false,
@@ -154,7 +154,7 @@ export const CursorProviderCapabilitiesV2 = {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: true,
     providerCanRollbackConversation: false,
-    providerRollbackReturnsSnapshot: false,
+    providerRollbackReturnsSnapshot: true,
     providerCanReadConversationSnapshot: true,
   },
   identity: {
@@ -2790,15 +2790,20 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 ),
               ),
           ),
+          // The SDK cannot truncate an agent, so the next turn creates one and hands it the kept turns.
           rollbackThread: (rollbackInput) =>
-            Effect.fail(
-              new ProviderAdapter.ProviderAdapterRollbackThreadError({
-                driver: CursorAgentSdk.CURSOR_PROVIDER,
-                providerThreadId: rollbackInput.providerThread.id,
-                checkpointId: rollbackInput.target.checkpointId,
-                cause: "Cursor Agent SDK does not expose conversation rollback.",
-              }),
-            ),
+            Effect.map(DateTime.now, (now) => ({
+              providerThread: {
+                ...rollbackInput.providerThread,
+                nativeThreadRef: null,
+                nativeConversationHeadRef: null,
+                status: "idle" as const,
+                updatedAt: now,
+              },
+              providerTurns: [],
+              messages: [],
+              runtimeRequests: [],
+            })),
           forkThread: (forkInput) =>
             Effect.fail(
               new ProviderAdapter.ProviderAdapterForkThreadError({

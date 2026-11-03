@@ -1896,10 +1896,14 @@ it.layer(
             textGeneration: {} as ProviderInstance["textGeneration"],
           };
         };
-        // Grok and the other ACP agents rewind into a fresh session; Cursor cannot rewind.
+        // ACP and Cursor rewind into a fresh session; a provider without rollback cannot rewind.
         const instances = [
           instanceFor("acp", AcpProviderCapabilitiesV2),
           instanceFor("cursor", CursorProviderCapabilitiesV2),
+          instanceFor("norollback", {
+            ...CursorProviderCapabilitiesV2,
+            threads: { ...CursorProviderCapabilitiesV2.threads, canRollbackThread: false },
+          }),
         ];
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1932,7 +1936,7 @@ it.layer(
           providers.map(
             (provider) => `${provider.instanceId}: ${provider.supportsConversationRollback}`,
           ),
-          ["cursor: false", "acp: true"],
+          ["cursor: true", "acp: true", "norollback: false"],
         );
       }),
     );

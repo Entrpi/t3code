@@ -46,6 +46,7 @@ import {
   canReuseCodexContextUsage,
 } from "../Adapters/CodexAdapterV2.ts";
 import { AcpProviderCapabilitiesV2 } from "@t3tools/provider-acp/server/adapter";
+import { CursorProviderCapabilitiesV2 } from "@t3tools/provider-cursor/testing";
 import * as EventSink from "../EventSink.ts";
 import * as EventStore from "../EventStore.ts";
 import * as LegacyV1ThreadImporter from "../legacy/LegacyV1ThreadImporter.ts";
@@ -103,8 +104,8 @@ function makeTestAdapter(input: {
   readonly refusalCause?: unknown;
   readonly failInjectionOnce?: Ref.Ref<boolean>;
   readonly nativeThreadGeneration?: Ref.Ref<number>;
-  /** Like ACP: rollback cannot truncate, so it answers with a fresh, empty native session. */
-  readonly rollbackStartsFreshSession?: boolean;
+  /** Rollback cannot truncate: ACP answers with a fresh, empty session; Cursor clears the native thread. */
+  readonly rollbackWithoutTruncation?: "fresh-session" | "clear-native-thread";
   readonly failResume?: boolean;
   readonly failResumeOnce?: Ref.Ref<boolean>;
   readonly initialContextUsage?: OrchestrationV2ProviderThread["contextUsage"];
@@ -395,7 +396,8 @@ function makeTestAdapter(input: {
           readThreadSnapshot: () =>
             unimplemented(input.driver, "readThreadSnapshot unused in provider switch test"),
           rollbackThread: ({ providerThread }) =>
-            input.rollbackStartsFreshSession !== true || input.nativeThreadGeneration === undefined
+            input.rollbackWithoutTruncation === undefined ||
+            input.nativeThreadGeneration === undefined
               ? unimplemented(input.driver, "rollbackThread unused in provider switch test")
               : Effect.gen(function* () {
                   const generation = yield* Ref.getAndUpdate(
@@ -405,11 +407,14 @@ function makeTestAdapter(input: {
                   return {
                     providerThread: {
                       ...providerThread,
-                      nativeThreadRef: {
-                        driver: input.driver,
-                        nativeId: `${input.driver}:${providerThread.appThreadId}:${generation}`,
-                        strength: "strong" as const,
-                      },
+                      nativeThreadRef:
+                        input.rollbackWithoutTruncation === "clear-native-thread"
+                          ? null
+                          : {
+                              driver: input.driver,
+                              nativeId: `${input.driver}:${providerThread.appThreadId}:${generation}`,
+                              strength: "strong" as const,
+                            },
                       status: "idle" as const,
                     },
                     providerTurns: [],
@@ -1914,22 +1919,25 @@ describe("orchestration v2 provider switching", () => {
     ),
   );
 
-  it.live("hands the kept turns to the fresh session an ACP rewind starts", () =>
+  it.live.each([
+    { name: "acp", capabilities: AcpProviderCapabilitiesV2, rollback: "fresh-session" },
+    { name: "cursor", capabilities: CursorProviderCapabilitiesV2, rollback: "clear-native-thread" },
+  ] as const)("hands the kept turns to the fresh session a $name rewind starts", (provider) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const cwd = yield* checkpointWorkspace("acp-rewind-keeps-context");
+        const cwd = yield* checkpointWorkspace(`${provider.name}-rewind-keeps-context`);
         const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
-        const rewindThreadId = ThreadId.make("thread:acp-rewind-keeps-context");
+        const rewindThreadId = ThreadId.make(`thread:${provider.name}-rewind-keeps-context`);
         const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
           makeTestAdapter({
             instanceId: GROK_MODEL_SELECTION.instanceId,
             driver: GROK_DRIVER,
-            capabilities: AcpProviderCapabilitiesV2,
+            capabilities: provider.capabilities,
             modelSelection: GROK_MODEL_SELECTION,
             responseByRunOrdinal: { 1: "Kept answer", 2: "Rewound answer" },
             capturedTurns,
             nativeThreadGeneration: yield* Ref.make(0),
-            rollbackStartsFreshSession: true,
+            rollbackWithoutTruncation: provider.rollback,
           }),
         ]);
         yield* Effect.gen(function* () {
@@ -1938,9 +1946,9 @@ describe("orchestration v2 provider switching", () => {
           const send = Effect.fn("sendAndSettle")(function* (ordinal: number, text: string) {
             yield* orchestrator.dispatch({
               type: "message.dispatch",
-              commandId: CommandId.make(`acp-rewind:${ordinal}`),
+              commandId: CommandId.make(`rewind:${ordinal}`),
               threadId: rewindThreadId,
-              messageId: MessageId.make(`acp-rewind:${ordinal}`),
+              messageId: MessageId.make(`rewind:${ordinal}`),
               createdBy: "user",
               creationSource: "web",
               text,
@@ -1953,7 +1961,7 @@ describe("orchestration v2 provider switching", () => {
           });
           yield* orchestrator.dispatch({
             type: "thread.create",
-            commandId: CommandId.make("acp-rewind:create"),
+            commandId: CommandId.make("rewind:create"),
             threadId: rewindThreadId,
             projectId,
             createdBy: "user",
@@ -1975,7 +1983,7 @@ describe("orchestration v2 provider switching", () => {
           yield* orchestrator.dispatch({
             type: "checkpoint.rollback",
             restoreFiles: false,
-            commandId: CommandId.make("acp-rewind:rollback"),
+            commandId: CommandId.make("rewind:rollback"),
             threadId: rewindThreadId,
             scopeId: keptCheckpoint.scopeId,
             checkpointId: keptCheckpoint.id,
@@ -2000,7 +2008,7 @@ describe("orchestration v2 provider switching", () => {
           Effect.provide(
             ProviderReplayHarness.layerWithRegistry(
               {
-                name: "acp-rewind-keeps-context",
+                name: `${provider.name}-rewind-keeps-context`,
                 runtimePolicyOverride: {
                   cwd,
                   approvalPolicy: "never",

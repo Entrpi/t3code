@@ -1311,7 +1311,7 @@ export const layer: Layer.Layer<
         }
         if (providerThread.nativeThreadRef === null) {
           // Pass the stored provider row for adoption; adapter-minted duplicates make activeProviderThreadId flap.
-          return yield* loadFromProvider(
+          const created = yield* loadFromProvider(
             session.ensureThread({
               threadId: projection.thread.id,
               title: projection.thread.title,
@@ -1321,6 +1321,9 @@ export const layer: Layer.Layer<
               existingProviderThread: providerThread,
             }),
           );
+          if (created !== undefined && rewoundToEmptySession(created))
+            yield* adoptRecoveryHandoff();
+          return created;
         }
         const uncertainDelivery = projection.contextHandoffs.some(
           (handoff) =>
