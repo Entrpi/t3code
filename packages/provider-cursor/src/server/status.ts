@@ -25,7 +25,6 @@ import * as CursorSdkCatalog from "./CursorSdkCatalog.ts";
 
 const CURSOR_PRESENTATION = {
   displayName: "Cursor",
-  supportsConversationRollback: false,
   showInteractionModeToggle: true,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({

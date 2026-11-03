@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "../config.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
@@ -29,6 +30,8 @@ const decodeCompatibilityPolicies = Schema.decodeUnknownSync(
   Schema.Array(ProviderCompatibilityPolicy),
 );
 const driver = ProviderDriverKind.make("codex");
+const codexOrchestrationAdapter: Pick<ProviderInstance["orchestrationAdapter"], "getCapabilities"> =
+  { getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2) };
 const policy: ProviderCompatibilityPolicy = {
   driver,
   t3CodeRange: ">=0.0.0",
@@ -265,7 +268,7 @@ it.effect("a remote policy refresh preserves a newer health result on the regist
             makeManualOnlyProviderMaintenanceCapabilities({ provider: driver, packageName: null }),
           ),
       },
-      orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+      orchestrationAdapter: codexOrchestrationAdapter as ProviderInstance["orchestrationAdapter"],
       textGeneration: {} as ProviderInstance["textGeneration"],
     };
     const refresh = Deferred.succeed(started, undefined).pipe(
