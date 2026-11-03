@@ -278,6 +278,7 @@ interface MessagesTimelineProps {
   threadStartCheckpointReady?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  onEditPrompt?: TimelineRowSharedState["onEditPrompt"];
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   onSendAppMessage?: (text: string) => Promise<void>;
   onRunShellCommand?: (command: string) => void;
@@ -377,6 +378,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   threadStartCheckpointReady = false,
   availableRevertTurnCounts,
   onRevertToTurnCount,
+  onEditPrompt,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   onSendAppMessage,
   onRunShellCommand,
@@ -1023,6 +1025,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     runs,
     activeThreadEnvironmentId,
     onRevertToTurnCount,
+    onEditPrompt,
     onRunShellCommand,
     findActive,
     onImageExpand,

@@ -102,6 +102,7 @@ import {
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
+import { attachmentIsPendingUpload } from "./AttachmentClaims.ts";
 import {
   CommandPolicyV2,
   goalCommandStopsActiveRun,
@@ -12041,6 +12042,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ["providerThreads", "checkpoints", "checkpointScopes", "runs", "providerTurns", "attempts"],
         { turnItemTypes: [], messageRoles: ["user"] },
       );
+      // The follow-up is dispatched by the effect worker, past the intake that claims uploads.
+      if (command.followUp?.attachments.some(attachmentIsPendingUpload)) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "A rollback follow-up can only resend attachments the thread already has.",
+        });
+      }
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === projection.thread.activeProviderThreadId,
       );
@@ -12198,6 +12207,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           request: {
             type: "provider-thread.rollback",
             ...(command.restoreFiles === undefined ? {} : { restoreFiles: command.restoreFiles }),
+            ...(command.followUp === undefined ? {} : { followUp: command.followUp }),
             providerThreadId: providerThread.id,
             checkpointId: targetCheckpoint.id,
             scopeId: targetScope.id,

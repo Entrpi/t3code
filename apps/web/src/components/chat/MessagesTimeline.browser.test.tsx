@@ -1,6 +1,6 @@
 import { flushSync } from "react-dom";
 import { AudioPreview } from "../files/AudioPreview";
-import { cdp, page } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 import {
   ComposerContextId,
   EnvironmentId,
@@ -826,6 +826,53 @@ describe("MessagesTimeline automation prompts", () => {
     expect(screen.buttons("Edit from here")).toHaveLength(0);
     await click(screen.button(/^Automation/));
     expect(screen.buttons("Edit from here")).toHaveLength(1);
+  });
+
+  it("edits the latest prompt in place and keeps Edit from here on earlier ones", async () => {
+    setup();
+    const firstRunId = RunId.make("run-1");
+    const latestRunId = RunId.make("run-2");
+    const onEditPrompt = vi.fn(async () => null);
+    const checkpoint = (runId: RunId, turnCount: number, assistantId: string) => ({
+      runId,
+      checkpointTurnCount: turnCount,
+      checkpointRef: `checkpoint-${turnCount}` as never,
+      status: "ready" as const,
+      files: [],
+      assistantMessageId: MessageId.make(assistantId),
+      completedAt: CREATED_AT,
+    });
+    await using screen = await renderTimeline(
+      [
+        message("First prompt", { runId: firstRunId, inputIntent: "turn_start" }, "user-1"),
+        message("First answer", { role: "assistant", runId: firstRunId }, "assistant-1"),
+        message("Latest prompt", { runId: latestRunId, inputIntent: "turn_start" }, "user-2"),
+        message("Latest answer", { role: "assistant", runId: latestRunId }, "assistant-2"),
+      ],
+      {
+        supportsConversationRollback: true,
+        threadStartCheckpointReady: true,
+        turnDiffSummaries: [
+          checkpoint(firstRunId, 1, "assistant-1"),
+          checkpoint(latestRunId, 2, "assistant-2"),
+        ],
+        onEditPrompt,
+      },
+    );
+    expect(screen.buttons("Edit from here")).toHaveLength(1);
+
+    const editor = screen.getByRole("textbox", { name: "Edit message" });
+    await click(screen.button("Edit"));
+    await expect.element(editor).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    await expect.element(editor).not.toBeInTheDocument();
+    expect(screen.text()).toContain("Latest prompt");
+
+    await click(screen.button("Edit"));
+    await expect.element(editor).toHaveFocus();
+    await userEvent.keyboard(", edited{Control>}{Enter}{/Control}");
+    expect(onEditPrompt).toHaveBeenCalledOnce();
+    expect(onEditPrompt).toHaveBeenCalledWith(1, MessageId.make("user-2"), "Latest prompt, edited");
   });
 });
 

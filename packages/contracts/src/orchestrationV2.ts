@@ -1410,6 +1410,16 @@ export const OrchestrationV2CheckpointRollbackRequest = Schema.Struct({
 export type OrchestrationV2CheckpointRollbackRequest =
   typeof OrchestrationV2CheckpointRollbackRequest.Type;
 
+/** A message sent once the rollback lands, and never when it fails. */
+export const OrchestrationV2RollbackFollowUp = Schema.Struct({
+  ...OrchestrationV2CreationFields,
+  messageId: MessageId,
+  text: Schema.String,
+  context: Schema.optional(OrchestrationMessageContext),
+  attachments: Schema.Array(ChatAttachment),
+});
+export type OrchestrationV2RollbackFollowUp = typeof OrchestrationV2RollbackFollowUp.Type;
+
 export class OrchestrationV2CheckpointUnavailableError extends Schema.TaggedError<OrchestrationV2CheckpointUnavailableError>()(
   "OrchestrationV2CheckpointUnavailableError",
   {
@@ -3291,6 +3301,7 @@ export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback"),
     restoreFiles: Schema.optional(Schema.Boolean),
+    followUp: Schema.optional(OrchestrationV2RollbackFollowUp),
     commandId: CommandId,
     threadId: ThreadId,
     scopeId: CheckpointScopeId,

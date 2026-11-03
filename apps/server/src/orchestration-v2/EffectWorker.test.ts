@@ -24,6 +24,7 @@ import * as Ref from "effect/Ref";
 
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
@@ -160,6 +161,7 @@ function layerExecutorFor(input: {
     Layer.provide(
       Layer.mergeAll(
         layerDependencies,
+        Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({}),
         Layer.mock(ThreadManagementService.ThreadManagementService)(input.threads ?? {}),
         ServerSettings.layerTest(
           input.continueAfterRestart === true ? { continueThreadsAfterServerUpdate: true } : {},

@@ -20,6 +20,7 @@ import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
@@ -37,6 +38,14 @@ export class OrchestrationEffectExecutionError extends Schema.TaggedError<Orches
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+class RollbackFollowUpError extends Schema.TaggedError<RollbackFollowUpError>()(
+  "RollbackFollowUpError",
+  { cause: Schema.Defect() },
+) {}
+
+const ROLLBACK_FOLLOW_UP_FAILED_MESSAGE =
+  "The conversation was rewound, but the edited message could not be sent.";
 
 /**
  * Do not apply this to `provider-turn.restart`: that compound effect also runs
@@ -74,6 +83,7 @@ export const layerExecutor: Layer.Layer<
   | ProviderSessionManager.ProviderSessionManagerV2
   | RunFinalizationService.RunFinalizationService
   | CheckpointRollbackService.CheckpointRollbackServiceV2
+  | CommandReceiptStore.CommandReceiptStoreV2
   | ProviderTurnControlService.ProviderTurnControlServiceV2
   | ProviderTurnStartService.ProviderTurnStartServiceV2
   | RuntimeRequestService.RuntimeRequestServiceV2
@@ -86,6 +96,7 @@ export const layerExecutor: Layer.Layer<
     const runFinalization = yield* RunFinalizationService.RunFinalizationService;
     const resourceCleanup = yield* ResourceCleanupService.ResourceCleanupService;
     const checkpointRollback = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
+    const commandReceipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const providerTurnControl = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
     const providerTurnStart = yield* ProviderTurnStartService.ProviderTurnStartServiceV2;
@@ -433,50 +444,75 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           }
-          case "provider-thread.rollback":
-            return checkpointRollback
-              .execute({
+          case "provider-thread.rollback": {
+            const request = effect.request;
+            const { followUp } = request;
+            const followUpCommandId = CommandId.make(`${effect.commandId}:follow-up`);
+            return Effect.gen(function* () {
+              // Replaying the rollback after its follow-up was accepted would rewind the follow-up too.
+              if (
+                followUp !== undefined &&
+                Option.isSome(yield* commandReceipts.getByCommandId(followUpCommandId))
+              )
+                return;
+              yield* checkpointRollback.execute({
                 threadId: effect.threadId,
-                providerThreadId: effect.request.providerThreadId,
-                checkpointId: effect.request.checkpointId,
-                scopeId: effect.request.scopeId,
-                ...(effect.request.restoreFiles === undefined
+                providerThreadId: request.providerThreadId,
+                checkpointId: request.checkpointId,
+                scopeId: request.scopeId,
+                ...(request.restoreFiles === undefined
                   ? {}
-                  : { restoreFiles: effect.request.restoreFiles }),
-              })
-              .pipe(
-                Effect.tapCause((cause) =>
-                  willRetry || Cause.hasInterruptsOnly(cause)
-                    ? Effect.void
-                    : threads
-                        .dispatch({
-                          type: "checkpoint.rollback.fail",
-                          commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
-                          threadId: effect.threadId,
-                          requestId: effect.commandId,
-                          message: Option.match(Cause.findErrorOption(cause), {
-                            onNone: () => CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
-                            onSome: CheckpointRollbackService.rollbackFailureClientMessage,
+                  : { restoreFiles: request.restoreFiles }),
+              });
+              if (followUp === undefined) return;
+              yield* threads
+                .dispatch({
+                  type: "message.dispatch",
+                  commandId: followUpCommandId,
+                  threadId: effect.threadId,
+                  ...followUp,
+                  dispatchMode: { type: "start_immediately" },
+                })
+                .pipe(Effect.mapError((cause) => new RollbackFollowUpError({ cause })));
+            }).pipe(
+              Effect.tapCause((cause) =>
+                willRetry || Cause.hasInterruptsOnly(cause)
+                  ? Effect.void
+                  : threads
+                      .dispatch({
+                        type: "checkpoint.rollback.fail",
+                        commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
+                        threadId: effect.threadId,
+                        requestId: effect.commandId,
+                        message: Option.match(Cause.findErrorOption(cause), {
+                          onNone: () => CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+                          onSome: (error) =>
+                            error._tag === "CheckpointRollbackExecutionError"
+                              ? CheckpointRollbackService.rollbackFailureClientMessage(error)
+                              : error._tag === "RollbackFollowUpError"
+                                ? ROLLBACK_FOLLOW_UP_FAILED_MESSAGE
+                                : CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+                        }),
+                      })
+                      .pipe(
+                        Effect.catchCause((recordCause) =>
+                          Effect.logWarning("Failed to record rollback failure", {
+                            effectId: effect.id,
+                            cause: recordCause,
                           }),
-                        })
-                        .pipe(
-                          Effect.catchCause((recordCause) =>
-                            Effect.logWarning("Failed to record rollback failure", {
-                              effectId: effect.id,
-                              cause: recordCause,
-                            }),
-                          ),
                         ),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
+                      ),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
+          }
           case "checkpoint.capture":
             return runFinalization
               .finalize({

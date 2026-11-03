@@ -1922,6 +1922,13 @@ describe("orchestration v2 provider switching", () => {
   it.live.each([
     { name: "acp", capabilities: AcpProviderCapabilitiesV2, rollback: "fresh-session" },
     { name: "cursor", capabilities: CursorProviderCapabilitiesV2, rollback: "clear-native-thread" },
+    // Inline Edit: the edited prompt rides on the rollback and is sent once it lands.
+    {
+      name: "acp-edit",
+      capabilities: AcpProviderCapabilitiesV2,
+      rollback: "fresh-session",
+      followUp: true,
+    },
   ] as const)("hands the kept turns to the fresh session a $name rewind starts", (provider) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1980,6 +1987,7 @@ describe("orchestration v2 provider switching", () => {
             (checkpoint) => checkpoint.appRunOrdinal === 1,
           );
           assert.isDefined(keptCheckpoint);
+          const followUp = "followUp" in provider;
           yield* orchestrator.dispatch({
             type: "checkpoint.rollback",
             restoreFiles: false,
@@ -1987,15 +1995,43 @@ describe("orchestration v2 provider switching", () => {
             threadId: rewindThreadId,
             scopeId: keptCheckpoint.scopeId,
             checkpointId: keptCheckpoint.id,
+            ...(followUp
+              ? {
+                  followUp: {
+                    createdBy: "user",
+                    creationSource: "web",
+                    messageId: MessageId.make("rewind:3"),
+                    text: "What did I say first?",
+                    attachments: [],
+                  },
+                }
+              : {}),
           });
           yield* worker.drain();
-          yield* send(3, "What did I say first?");
+          if (followUp) {
+            yield* waitForIdle(rewindThreadId);
+            yield* worker.drain();
+            // A rollback replayed after process loss must not rewind the follow-up it sent.
+            const outbox = yield* EffectOutbox.EffectOutboxV2;
+            const [rollback] = yield* outbox.listByCommandId(CommandId.make("rewind:rollback"));
+            assert.isDefined(rollback);
+            const { commandId, threadId, request } = rollback;
+            yield* outbox.enqueue([{ id: `${rollback.id}:replay`, commandId, threadId, request }]);
+            yield* outbox.notifyAvailable();
+            yield* worker.drain();
+          } else {
+            yield* send(3, "What did I say first?");
+          }
           yield* send(4, "And then?");
 
           const projection = yield* orchestrator.getThreadProjection(rewindThreadId);
           assert.deepEqual(
             projection.runs.map((run) => run.status),
             ["completed", "rolled_back", "completed", "completed"],
+          );
+          assert.lengthOf(
+            projection.messages.filter((message) => message.text === "What did I say first?"),
+            1,
           );
           const turns = yield* Ref.get(capturedTurns);
           assert.lengthOf(turns, 4);

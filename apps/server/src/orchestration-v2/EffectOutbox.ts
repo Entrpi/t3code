@@ -4,6 +4,7 @@ import {
   CommandId,
   MessageId,
   NodeId,
+  OrchestrationV2RollbackFollowUp,
   ProviderSessionId,
   RunAttemptId,
   ProviderApprovalDecision,
@@ -86,6 +87,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("provider-thread.rollback"),
     restoreFiles: Schema.optional(Schema.Boolean),
+    followUp: Schema.optional(OrchestrationV2RollbackFollowUp),
     providerThreadId: ProviderThreadId,
     checkpointId: CheckpointId,
     scopeId: CheckpointScopeId,

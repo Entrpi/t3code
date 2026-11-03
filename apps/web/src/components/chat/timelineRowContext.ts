@@ -61,6 +61,10 @@ export interface TimelineRowSharedState {
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  /** Rewinds before the message and sends `text` in its place; resolves to an error or null. */
+  onEditPrompt?:
+    | ((targetTurnCount: number, messageId: MessageId, text: string) => Promise<string | null>)
+    | undefined;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;
   onAppFullscreenChange: (rowId: string, fullscreen: boolean) => void;
