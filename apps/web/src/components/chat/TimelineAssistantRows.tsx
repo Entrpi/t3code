@@ -99,8 +99,16 @@ function AssistantForkButton({
     capabilities: support.providerSession?.capabilities,
   });
 
+  const activity = use(TimelineRowActivityCtx);
+
   const onForkFromRun = ctx.onForkFromRun;
-  if (!canFork || onForkFromRun === undefined || projectedItem.item.runId === null) return null;
+  if (
+    !canFork ||
+    !activity.latestExchangeSettled ||
+    onForkFromRun === undefined ||
+    projectedItem.item.runId === null
+  )
+    return null;
   const runId = projectedItem.item.runId;
 
   return (

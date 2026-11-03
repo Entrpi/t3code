@@ -42,6 +42,7 @@ import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { isLatestExchangeSettled } from "@t3tools/client-runtime/state/thread-inbox";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
@@ -3411,6 +3412,9 @@ export default function ChatView(props: ChatViewProps) {
                     ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }
                     : {})}
                   isWorking={isWorking}
+                  latestExchangeSettled={
+                    !isWorking && (serverThread === null || isLatestExchangeSettled(serverThread))
+                  }
                   runlessWorkActive={runlessWorkStartedAt !== null}
                   isCompacting={isCompacting}
                   awaitingUser={

@@ -176,6 +176,9 @@ restoring would erase their changes. A thread that works in the project director
 rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
 resending; on mobile only the text returns. Any unsent draft stays above the restored prompt.
 
+**Edit**, **Edit from here**, and **Fork from this response** appear once the latest turn
+has fully finished, including background work and any approval or question it waits on.
+
 This removes the selected message and later conversation from the active thread
 and provider history. It does not undo external actions or separate provider
 memory. Every provider except Muse supports it. Providers that cannot shorten their

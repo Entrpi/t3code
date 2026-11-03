@@ -353,6 +353,8 @@ export interface ThreadFeedProps {
   readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
   /** Rewinds the thread to before this prompt; `turnCount` is the run ordinal to return to. */
   readonly onEditFromHere?: ((message: ThreadFeedMessage, turnCount: number) => void) | null;
+  /** Nothing still runs or waits in the latest exchange; Edit from here and Fork wait for it. */
+  readonly latestExchangeSettled: boolean;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   /** Null while the thread's creation is queued: reading detail then caches a not-found as deleted. */
@@ -1682,6 +1684,7 @@ function renderFeedEntry(
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: RunId | null;
+    readonly latestExchangeSettled: boolean;
     readonly compactionLabelsByEntryId: ReadonlyMap<string, { title: string; compacting: string }>;
     readonly failedRunIds: ReadonlySet<RunId>;
     readonly rewindTurnCountByRunId: ReadonlyMap<RunId, number>;
@@ -1992,7 +1995,7 @@ function renderFeedEntry(
         : null;
       const rewindTurnCount =
         props.onEditFromHere != null &&
-        props.unsettledTurnId === null &&
+        props.latestExchangeSettled &&
         foldRowId === null &&
         presentation.attribution !== "guest" &&
         message.visibility !== "inherited" &&
@@ -2320,7 +2323,7 @@ function renderFeedEntry(
               buttonSize={props.replyActionSize.button}
               iconSize={props.replyActionSize.icon}
             />
-            {message.projectedItem ? (
+            {message.projectedItem && props.latestExchangeSettled ? (
               <AssistantForkButton
                 environmentId={props.environmentId}
                 iconColor={iconSubtleColor}
@@ -3238,6 +3241,9 @@ export const ThreadFeed = memo(function ThreadFeed({
   );
   const reviewCommentColors = useReviewCommentColors();
   const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
+  // A message still in the outbox is the start of the next exchange.
+  const latestExchangeSettled =
+    props.latestExchangeSettled && unsettledTurnId === null && props.queuedMessages.length === 0;
   const compactionLabelsByEntryId = useMemo(
     () => threadFeedCompactionLabels(props.feed),
     [props.feed],
@@ -3252,6 +3258,7 @@ export const ThreadFeed = memo(function ThreadFeed({
     setupWorkingStartedAt: props.setupWorkingStartedAt,
     dispatchingMessageId: props.dispatchingMessageId,
     unsettledTurnId,
+    latestExchangeSettled,
     copiedRowId,
     expandedWorkGroups,
     expandedWorkRows,
@@ -3786,6 +3793,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             workGroupScrollPositions,
             terminalAssistantMessageIds,
             unsettledTurnId,
+            latestExchangeSettled,
             compactionLabelsByEntryId,
             failedRunIds,
             rewindTurnCountByRunId,

@@ -828,7 +828,7 @@ describe("MessagesTimeline automation prompts", () => {
     expect(screen.buttons("Edit from here")).toHaveLength(1);
   });
 
-  it("edits the latest prompt in place and keeps Edit from here on earlier ones", async () => {
+  it("edits the latest prompt in place, keeps Edit from here on earlier ones, and hides exchange actions until settled", async () => {
     setup();
     const firstRunId = RunId.make("run-1");
     const latestRunId = RunId.make("run-2");
@@ -842,55 +842,58 @@ describe("MessagesTimeline automation prompts", () => {
       assistantMessageId: MessageId.make(assistantId),
       completedAt: CREATED_AT,
     });
-    await using screen = await renderTimeline(
-      [
-        message("First prompt", { runId: firstRunId, inputIntent: "turn_start" }, "user-1"),
-        message("First answer", { role: "assistant", runId: firstRunId }, "assistant-1"),
-        message(
-          "Latest prompt [notes.txt](t3-context://v1/file/ctx_notes)",
-          {
-            runId: latestRunId,
-            inputIntent: "turn_start",
-            attachments: [
+    const entries = [
+      message("First prompt", { runId: firstRunId, inputIntent: "turn_start" }, "user-1"),
+      {
+        ...message("First answer", { role: "assistant", runId: firstRunId }, "assistant-1"),
+        projectedItem: v2Item("assistant_message", { id: "assistant-1" }),
+      },
+      message(
+        "Latest prompt [notes.txt](t3-context://v1/file/ctx_notes)",
+        {
+          runId: latestRunId,
+          inputIntent: "turn_start",
+          attachments: [
+            {
+              type: "file",
+              id: "notes",
+              name: "notes.txt",
+              mimeType: "text/plain",
+              sizeBytes: 5,
+            },
+          ],
+          context: {
+            version: 1,
+            records: [
               {
-                type: "file",
-                id: "notes",
+                version: 1,
+                kind: "file",
+                contextId: ComposerContextId.make("ctx_notes"),
+                label: "notes.txt",
+                attachmentId: "notes",
                 name: "notes.txt",
                 mimeType: "text/plain",
                 sizeBytes: 5,
               },
             ],
-            context: {
-              version: 1,
-              records: [
-                {
-                  version: 1,
-                  kind: "file",
-                  contextId: ComposerContextId.make("ctx_notes"),
-                  label: "notes.txt",
-                  attachmentId: "notes",
-                  name: "notes.txt",
-                  mimeType: "text/plain",
-                  sizeBytes: 5,
-                },
-              ],
-            },
           },
-          "user-2",
-        ),
-        message("Latest answer", { role: "assistant", runId: latestRunId }, "assistant-2"),
+        },
+        "user-2",
+      ),
+      message("Latest answer", { role: "assistant", runId: latestRunId }, "assistant-2"),
+    ];
+    const props = {
+      supportsConversationRollback: true,
+      threadStartCheckpointReady: true,
+      turnDiffSummaries: [
+        checkpoint(firstRunId, 1, "assistant-1"),
+        checkpoint(latestRunId, 2, "assistant-2"),
       ],
-      {
-        supportsConversationRollback: true,
-        threadStartCheckpointReady: true,
-        turnDiffSummaries: [
-          checkpoint(firstRunId, 1, "assistant-1"),
-          checkpoint(latestRunId, 2, "assistant-2"),
-        ],
-        onEditPrompt,
-      },
-    );
+      onEditPrompt,
+    };
+    await using screen = await renderTimeline(entries, props);
     expect(screen.buttons("Edit from here")).toHaveLength(1);
+    expect(screen.buttons("Fork from this response")).toHaveLength(1);
 
     const editor = screen.getByRole("textbox", { name: "Edit message" });
     await click(screen.button("Edit"));
@@ -917,6 +920,19 @@ describe("MessagesTimeline automation prompts", () => {
       expect.stringMatching(/^Latest prompt\s*, edited$/),
       { kept: [], added: [expect.objectContaining({ type: "file", name: "plan.md" })] },
     );
+
+    // A background task, approval, or question still open keeps every exchange's actions hidden.
+    await screen.rerender(
+      <MessagesTimeline
+        {...baseProps()}
+        timelineEntries={entries}
+        {...props}
+        latestExchangeSettled={false}
+      />,
+    );
+    expect(screen.buttons("Edit")).toHaveLength(0);
+    expect(screen.buttons("Edit from here")).toHaveLength(0);
+    expect(screen.buttons("Fork from this response")).toHaveLength(0);
   });
 });
 

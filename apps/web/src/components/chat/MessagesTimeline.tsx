@@ -224,6 +224,8 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   isWorking: boolean;
+  /** Nothing still runs or waits in the latest exchange; defaults to not working. */
+  latestExchangeSettled?: boolean;
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
   worktreeSetup?: WorktreeSetupSnapshot | null;
@@ -338,6 +340,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
   isWorking,
+  latestExchangeSettled = !isWorking,
   runlessWorkActive = false,
   activeTurnStartedAt = null,
   worktreeSetup = null,
@@ -1069,6 +1072,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       : null;
   const activityState: TimelineRowActivityState = {
     isWorking,
+    latestExchangeSettled,
     isCompacting: compactionAwaitingRow,
     isRevertingCheckpoint,
     backgroundWorktreeSetup,

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   createInboxReturnTracker,
+  isLatestExchangeSettled,
   isThreadWorking,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
@@ -33,6 +34,38 @@ function thread(id: string, working: boolean) {
       : null,
   };
 }
+
+describe("isLatestExchangeSettled", () => {
+  const idle = { ...thread("a", false), pendingBackgroundTasks: [] };
+  const runtime = (status: "idle" | "waiting" | "queued" | "completed") => ({
+    ...thread("a", true).runtime!,
+    status,
+  });
+  const task = (kind: "subagent" | "command", awaited?: true) => ({
+    taskId: "task-1",
+    kind,
+    ...(awaited === undefined ? {} : { awaited }),
+  });
+  it.each([
+    ["an idle thread", true, {}],
+    ["a completed run", true, { runtime: runtime("completed") }],
+    ["a command left running unawaited", true, { pendingBackgroundTasks: [task("command")] }],
+    ["a running turn", false, { runtime: thread("a", true).runtime }],
+    ["a run waiting on the provider", false, { runtime: runtime("waiting") }],
+    ["a queued run", false, { runtime: runtime("queued") }],
+    ["a pending approval", false, { hasPendingApprovals: true }],
+    ["a pending question", false, { hasPendingUserInput: true }],
+    ["a subagent's pending request", false, { pendingSubagentRequest: "approval" as const }],
+    [
+      "a background subagent",
+      false,
+      { runtime: runtime("idle"), pendingBackgroundTasks: [task("subagent")] },
+    ],
+    ["an awaited command", false, { pendingBackgroundTasks: [task("command", true)] }],
+  ])("%s → settled %s", (_name, settled, change) => {
+    expect(isLatestExchangeSettled({ ...idle, ...change })).toBe(settled);
+  });
+});
 
 describe("createInboxReturnTracker", () => {
   beforeEach(() => {

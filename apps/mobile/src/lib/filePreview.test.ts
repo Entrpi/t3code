@@ -440,6 +440,7 @@ describe("ThreadInlineFilePreview playback", () => {
         root!.render(
           createElement(ThreadFeed, {
             environmentId,
+            latestExchangeSettled: true,
             threadId,
             detailRef: null,
             threadTitle: "preview",
@@ -1379,6 +1380,7 @@ describe("ThreadFeed previews", () => {
         null,
         createElement(ThreadFeed, {
           environmentId,
+          latestExchangeSettled: true,
           threadId,
           detailRef: null,
           threadTitle: "preview",

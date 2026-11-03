@@ -1115,6 +1115,7 @@ function UserMessageIntentMarker({
 
 function EditUserMessageButton({ onEdit }: { onEdit: () => void }) {
   const activity = use(TimelineRowActivityCtx);
+  if (!activity.latestExchangeSettled) return null;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -1123,7 +1124,7 @@ function EditUserMessageButton({ onEdit }: { onEdit: () => void }) {
             type="button"
             size="xs"
             variant="ghost"
-            disabled={activity.isRevertingCheckpoint || activity.isWorking}
+            disabled={activity.isRevertingCheckpoint}
             onClick={onEdit}
             aria-label="Edit"
           />
@@ -1145,6 +1146,7 @@ function RevertUserMessageButton({
 }) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
+  if (!activity.latestExchangeSettled) return null;
 
   return (
     <Tooltip>
@@ -1154,7 +1156,7 @@ function RevertUserMessageButton({
             type="button"
             size="xs"
             variant="ghost"
-            disabled={activity.isRevertingCheckpoint || activity.isWorking}
+            disabled={activity.isRevertingCheckpoint}
             onClick={() => ctx.onRevertToTurnCount(turnCount, messageId)}
             aria-label="Edit from here"
           />
