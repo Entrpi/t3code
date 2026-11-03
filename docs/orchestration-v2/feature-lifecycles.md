@@ -407,7 +407,7 @@ rollback.toRun(threadId, targetRunOrdinal)
   -> call provider rollback
   -> reconcile returned provider snapshot if available
   -> mark later runs rolled_back
-  -> delete or mark stale later checkpoint refs
+  -> mark later checkpoints stale, keeping their refs so earlier versions stay restorable
 ```
 
 Codex `thread/revert` returns updated loaded thread metadata with an empty `turns` array; retained history must be hydrated through `thread/turns/list`. Other providers may require a synthetic provider thread restart from context.
