@@ -13,7 +13,10 @@ import { Link } from "@tanstack/react-router";
 import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import {
+  replaceComposerContextReferences,
+  stripAttachmentOnlyBootstrapPrompt,
+} from "@t3tools/shared/composerContextReferences";
 import { memo, use, useState, type ReactNode } from "react";
 import {
   createMessageAttachmentPreviewProjector,
@@ -52,6 +55,7 @@ import {
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
+import { InlinePromptEditor } from "./InlinePromptEditor";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
@@ -463,6 +467,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const resolvedContext = resolveUserMessageContext({ ...row.message, text: userMessage.text });
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const revertTurnCount = row.revertTurnCount;
+  const [editing, setEditing] = useState(false);
+  const { onEditPrompt } = ctx;
+  const inlineEditTurnCount =
+    row.editInline === true &&
+    !folded &&
+    userMessage.attribution !== "guest" &&
+    onEditPrompt !== undefined
+      ? revertTurnCount
+      : undefined;
+  const editingInline = editing && inlineEditTurnCount !== undefined;
   const attachmentReferences = collectComposerContextReferences(resolvedContext.text).flatMap(
     (occurrence) => {
       const record = asKnownContextRecord(resolvedContext.recordsById.get(occurrence.contextId));
@@ -774,6 +788,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   // Touch shows actions all the time, and narrow lanes have no room beside the
   // bubble, so both keep the actions on their own line.
   const floatActions = row.groupedWithNext === true && !coarsePointer;
+  const bubbleSurface = editingInline || (!mediaOnly && !fileCardsOnly && !audioOnly);
   const messageActions = (
     <div
       className={cn(
@@ -795,9 +810,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </TooltipPopup>
       </Tooltip>
       <div className={cn("flex items-center gap-0.5", floatActions && "flex-wrap justify-end")}>
-        {typeof revertTurnCount === "number" && (
+        {inlineEditTurnCount !== undefined ? (
+          <EditUserMessageButton onEdit={() => setEditing(true)} />
+        ) : typeof revertTurnCount === "number" ? (
           <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
-        )}
+        ) : null}
         {copyText && (
           <MessageCopyButton
             text={contextClipboardFragment ? copyText : plainText}
@@ -861,9 +878,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           BUBBLE_CHIP_CLASS_NAME,
           userMessage.attribution === "guest"
             ? guestBubbleClassName(false)
-            : !mediaOnly && !fileCardsOnly && !audioOnly && "bg-message",
-          !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "p-3",
-          folded && expanded && "w-full",
+            : bubbleSurface && "bg-message",
+          !folded && bubbleSurface && "p-3",
+          ((folded && expanded) || editingInline) && "w-full",
         )}
       >
         {/* Outside the fold so a collapsed message still has a heading to navigate to. */}
@@ -1002,7 +1019,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 ))}
               </div>
             ) : null}
-            {fileCardsOnly || audioOnly ? null : (
+            {editingInline ? (
+              <InlinePromptEditor
+                initialText={stripAttachmentOnlyBootstrapPrompt(row.message.text)}
+                allowEmpty={(row.message.attachments?.length ?? 0) > 0}
+                skills={ctx.skills}
+                onCancel={() => setEditing(false)}
+                onSave={(text) => onEditPrompt!(inlineEditTurnCount, row.message.id, text)}
+              />
+            ) : fileCardsOnly || audioOnly ? null : (
               <div onCopyCapture={onBodyCopyCapture}>
                 <CollapsibleUserMessageBody
                   text={resolvedContext.text}
@@ -1015,7 +1040,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             )}
           </div>
         ) : null}
-        {floatActions ? (
+        {floatActions && !editingInline ? (
           <div
             className={cn(
               "absolute end-full top-1/2 me-2 hidden w-max max-w-[calc(20cqw-0.5rem)] -translate-y-1/2 @min-[37rem]:flex",
@@ -1027,7 +1052,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         ) : null}
       </div>
       <UserMessageProjectedStatus row={row} />
-      {!folded || expanded ? (
+      {!editingInline && (!folded || expanded) ? (
         <div
           className={cn(
             "flex w-full max-w-[80%] justify-end pe-1",
@@ -1068,6 +1093,29 @@ function UserMessageIntentMarker({
           ? "Originally queued, then promoted to steer the active turn"
           : "Steered the active turn"}
       </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function EditUserMessageButton({ onEdit }: { onEdit: () => void }) {
+  const activity = use(TimelineRowActivityCtx);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={activity.isRevertingCheckpoint || activity.isWorking}
+            onClick={onEdit}
+            aria-label="Edit"
+          />
+        }
+      >
+        <PencilIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Edit</TooltipPopup>
     </Tooltip>
   );
 }

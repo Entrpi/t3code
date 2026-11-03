@@ -103,6 +103,8 @@ function makeTestAdapter(input: {
   readonly refusalCause?: unknown;
   readonly failInjectionOnce?: Ref.Ref<boolean>;
   readonly nativeThreadGeneration?: Ref.Ref<number>;
+  /** Rollback truncates the native thread in place, as Codex does. */
+  readonly nativeRollback?: boolean;
   readonly failResume?: boolean;
   readonly failResumeOnce?: Ref.Ref<boolean>;
   readonly initialContextUsage?: OrchestrationV2ProviderThread["contextUsage"];
@@ -392,8 +394,15 @@ function makeTestAdapter(input: {
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: () =>
             unimplemented(input.driver, "readThreadSnapshot unused in provider switch test"),
-          rollbackThread: () =>
-            unimplemented(input.driver, "rollbackThread unused in provider switch test"),
+          rollbackThread: ({ providerThread }) =>
+            input.nativeRollback === true
+              ? Effect.succeed({
+                  providerThread: { ...providerThread, status: "idle" as const },
+                  providerTurns: [],
+                  messages: [],
+                  runtimeRequests: [],
+                })
+              : unimplemented(input.driver, "rollbackThread unused in provider switch test"),
           forkThread: () =>
             unimplemented(input.driver, "forkThread unused in provider switch test"),
         };
@@ -1887,6 +1896,124 @@ describe("orchestration v2 provider switching", () => {
             ),
           );
         }
+      }),
+    ),
+  );
+
+  // Inline Edit: the edited prompt rides on the rollback and is sent once it lands.
+  it.live("sends an inline edit once its rewind lands, and a replayed rewind keeps it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("inline-edit-rewind");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const rewindThreadId = ThreadId.make("thread:inline-edit-rewind");
+        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+          makeTestAdapter({
+            instanceId: CODEX_MODEL_SELECTION.instanceId,
+            driver: CODEX_DRIVER,
+            capabilities: CodexProviderCapabilitiesV2,
+            modelSelection: CODEX_MODEL_SELECTION,
+            responseByRunOrdinal: { 1: "Kept answer", 2: "Rewound answer" },
+            capturedTurns,
+            nativeRollback: true,
+          }),
+        ]);
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const send = Effect.fn("sendAndSettle")(function* (ordinal: number, text: string) {
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`inline-edit:${ordinal}`),
+              threadId: rewindThreadId,
+              messageId: MessageId.make(`inline-edit:${ordinal}`),
+              createdBy: "user",
+              creationSource: "web",
+              text,
+              attachments: [],
+              modelSelection: CODEX_MODEL_SELECTION,
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* waitForIdle(rewindThreadId);
+            yield* worker.drain();
+          });
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("inline-edit:create"),
+            threadId: rewindThreadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "Inline edit",
+            modelSelection: CODEX_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: cwd,
+          });
+          yield* send(1, "Kept prompt");
+          yield* send(2, "Rewound prompt");
+          const beforeRewind = yield* orchestrator.getThreadProjection(rewindThreadId);
+          const keptCheckpoint = beforeRewind.checkpoints.find(
+            (checkpoint) => checkpoint.appRunOrdinal === 1,
+          );
+          assert.isDefined(keptCheckpoint);
+          yield* orchestrator.dispatch({
+            type: "checkpoint.rollback",
+            restoreFiles: false,
+            commandId: CommandId.make("inline-edit:rollback"),
+            threadId: rewindThreadId,
+            scopeId: keptCheckpoint.scopeId,
+            checkpointId: keptCheckpoint.id,
+            followUp: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: MessageId.make("inline-edit:3"),
+              text: "Edited prompt",
+              attachments: [],
+            },
+          });
+          yield* worker.drain();
+          yield* waitForIdle(rewindThreadId);
+          yield* worker.drain();
+          // A rollback replayed after process loss must not rewind the follow-up it sent.
+          const outbox = yield* EffectOutbox.EffectOutboxV2;
+          const [rollback] = yield* outbox.listByCommandId(CommandId.make("inline-edit:rollback"));
+          assert.isDefined(rollback);
+          const { commandId, threadId, request } = rollback;
+          yield* outbox.enqueue([{ id: `${rollback.id}:replay`, commandId, threadId, request }]);
+          yield* outbox.notifyAvailable();
+          yield* worker.drain();
+
+          const projection = yield* orchestrator.getThreadProjection(rewindThreadId);
+          assert.deepEqual(
+            projection.runs.map((run) => run.status),
+            ["completed", "rolled_back", "completed"],
+          );
+          assert.lengthOf(
+            projection.messages.filter((message) => message.text === "Edited prompt"),
+            1,
+          );
+          const turns = yield* Ref.get(capturedTurns);
+          assert.deepEqual(
+            turns.map((turn) => turn.text),
+            ["Kept prompt", "Rewound prompt", "Edited prompt"],
+          );
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: "inline-edit-rewind",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: { type: "readOnly" },
+                },
+              },
+              layerRegistry,
+            ),
+          ),
+        );
       }),
     ),
   );

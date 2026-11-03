@@ -1033,6 +1033,42 @@ export async function waitForRevertedMessage(
   });
 }
 
+/** Resolves once the rollback's follow-up message arrives; rejects with the rollback's failure. */
+export async function waitForRollbackFollowUp(
+  threadRef: ScopedThreadRef,
+  requestId: CommandId,
+  followUpMessageId: MessageId,
+  revert: () => Promise<void>,
+  timeoutMs = 120_000,
+): Promise<void> {
+  const threadAtom = environmentThreadDetails.stateAtom(threadRef);
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== undefined) globalThis.clearTimeout(timeout);
+      unsubscribe();
+      if (error !== undefined) reject(error);
+      else resolve();
+    };
+    const inspect = () => {
+      const thread = Option.getOrNull(appAtomRegistry.get(threadAtom).data);
+      if (!thread) return;
+      const failure = thread.thread.rollbackFailure;
+      if (failure?.requestId === requestId) finish(new Error(failure.message));
+      else if (thread.messages.some((message) => message.id === followUpMessageId)) finish();
+    };
+    unsubscribe = appAtomRegistry.subscribe(threadAtom, inspect);
+    timeout = globalThis.setTimeout(() => {
+      finish(new Error("Timed out waiting for the edited message to send."));
+    }, timeoutMs);
+    Promise.resolve().then(revert).then(inspect, finish);
+  });
+}
+
 export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;

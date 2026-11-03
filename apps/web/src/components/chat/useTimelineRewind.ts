@@ -5,6 +5,7 @@ import type { SessionPhase } from "../../types";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   AuthOrchestrationOperateScope,
+  CommandId,
   type EnvironmentId,
   type MessageId,
   type ScopedThreadRef,
@@ -20,10 +21,13 @@ import {
 import { readLocalApi } from "../../localApi";
 import { findRevertCheckpoint } from "../../session-logic";
 import { type ChatMessage } from "../../types";
-import { newThreadId } from "~/lib/utils";
+import { newMessageId, newThreadId, randomUUID } from "~/lib/utils";
+import { restoreAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
+import * as Option from "effect/Option";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { threadEnvironment } from "../../state/threads";
+import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { waitForThreadShell } from "../../state/entities";
 import { openRevertConfirm } from "./ChatOverlayHosts";
 import { assetEnvironment } from "../../state/assets";
@@ -32,7 +36,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { rewindToMessage } from "./chatViewSend";
-import { makeThreadErrorSetter } from "../ChatView.logic";
+import { makeThreadErrorSetter, waitForRollbackFollowUp } from "../ChatView.logic";
 interface TimelineRewindInput {
   readonly environmentId: EnvironmentId;
   readonly routeThreadRef: ScopedThreadRef;
@@ -90,6 +94,22 @@ export function useTimelineRewind(input: TimelineRewindInput) {
     reportFailure: false,
   });
 
+  const setRewinding = (rewinding: boolean) =>
+    useComposerDraftStore.setState((store) => {
+      const keys = new Set(store.rewindingThreadKeys);
+      if (rewinding) keys.add(routeThreadKey);
+      else keys.delete(routeThreadKey);
+      return { rewindingThreadKeys: keys };
+    });
+  const showComposerPrompt = (nextPrompt: string) => {
+    if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
+    promptRef.current = nextPrompt;
+    composerRef.current?.resetCursorState({ prompt: nextPrompt, cursor: nextPrompt.length });
+    requestAnimationFrame(() => {
+      if (currentRouteThreadKeyRef.current === routeThreadKey) composerRef.current?.focusAtEnd();
+    });
+  };
+
   const onRevertToTurnCount = async (
     turnCount: number,
     messageId: MessageId,
@@ -129,9 +149,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
       return;
     }
 
-    useComposerDraftStore.setState((store) => ({
-      rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
-    }));
+    setRewinding(true);
     setThreadError(activeThread.id, null);
     const rewind = await rewindToMessage({
       message,
@@ -147,29 +165,88 @@ export function useTimelineRewind(input: TimelineRewindInput) {
       createAssetUrl: createAttachmentAssetUrl,
       revertThreadCheckpoint,
     });
-    useComposerDraftStore.setState((store) => {
-      const remaining = new Set(store.rewindingThreadKeys);
-      remaining.delete(routeThreadKey);
-      return { rewindingThreadKeys: remaining };
-    });
+    setRewinding(false);
     if (rewind.error !== null) {
       setThreadError(activeThread.id, rewind.error);
       return;
     }
-    if (currentRouteThreadKeyRef.current === routeThreadKey) {
-      const nextPrompt = rewind.prompt;
-      promptRef.current = nextPrompt;
-      composerRef.current?.resetCursorState({ prompt: nextPrompt, cursor: nextPrompt.length });
-      requestAnimationFrame(() => {
-        if (currentRouteThreadKeyRef.current === routeThreadKey) composerRef.current?.focusAtEnd();
-      });
-    }
+    showComposerPrompt(rewind.prompt);
   };
   const onRevertToTurnCountStable = useStableCallback(onRevertToTurnCount);
   const onConfirmRevert = (turnCount: number, messageId: MessageId, restoreFiles: boolean) => {
     void onRevertToTurnCount(turnCount, messageId, restoreFiles);
   };
   const onConfirmRevertStable = useStableCallback(onConfirmRevert);
+
+  const onEditPrompt = async (
+    turnCount: number,
+    messageId: MessageId,
+    text: string,
+  ): Promise<string | null> => {
+    if (!activeThread || isRevertingCheckpoint) return "Wait for the thread to settle.";
+    if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
+      return "You can't edit messages in this thread.";
+    if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel)
+      return `Reconnect ${activeEnvironmentUnavailableLabel} before editing.`;
+    if (phase === "running" || isSendBusy) return "Interrupt the current turn before editing.";
+    const message = serverProjection?.messages.find((candidate) => candidate.id === messageId);
+    if (!message) return "Reload the thread to edit this message.";
+    const commandId = CommandId.make(randomUUID());
+    const followUpMessageId = newMessageId();
+    const checkpoint = findRevertCheckpoint(serverProjection?.checkpoints ?? [], turnCount);
+    const threadId = activeThread.id;
+    setRewinding(true);
+    setThreadError(threadId, null);
+    const failure = await waitForRollbackFollowUp(
+      routeThreadRef,
+      commandId,
+      followUpMessageId,
+      async () => {
+        const result = await revertThreadCheckpoint({
+          environmentId,
+          input: {
+            commandId,
+            threadId,
+            turnCount,
+            // Inline Edit has no confirmation, so it keeps workspace files as they are.
+            restoreFiles: false,
+            ...(checkpoint === undefined
+              ? {}
+              : { checkpointId: checkpoint.id, scopeId: checkpoint.scopeId }),
+            followUp: {
+              messageId: followUpMessageId,
+              text: restoreAttachmentOnlyBootstrapPrompt(
+                text.trim(),
+                message.attachments.length > 0,
+              ),
+              ...(message.context === undefined ? {} : { context: message.context }),
+              attachments: message.attachments,
+            },
+          },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      },
+    ).then(
+      () => null,
+      (error: unknown) => (error instanceof Error ? error.message : "Could not edit this message."),
+    );
+    setRewinding(false);
+    if (failure === null) return null;
+    // A rewind that landed took the message, and its editor, with it.
+    const run = Option.getOrNull(
+      appAtomRegistry.get(environmentThreadDetails.stateAtom(routeThreadRef)).data,
+    )?.runs.find((candidate) => candidate.id === message.runId);
+    if (run?.status === "rolled_back") {
+      const draft = useComposerDraftStore.getState();
+      const current = draft.getComposerDraft(composerDraftTarget)?.prompt ?? "";
+      const nextPrompt = current.length > 0 ? `${current}\n\n${text.trim()}` : text.trim();
+      draft.setPrompt(composerDraftTarget, nextPrompt);
+      showComposerPrompt(nextPrompt);
+      setThreadError(threadId, failure);
+    }
+    return failure;
+  };
+  const onEditPromptStable = useStableCallback(onEditPrompt);
 
   const onForkFromRun = async (input: {
     readonly sourceThreadId: ThreadId;
@@ -217,6 +294,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
   const onRevertTimelineTurnStable = useStableCallback(onRevertTimelineTurn);
   return {
     onConfirmRevertStable,
+    onEditPromptStable,
     onForkFromRunStable,
     onRevertTimelineTurnStable,
   };

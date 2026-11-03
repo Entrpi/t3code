@@ -940,7 +940,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
       });
       return {
         threadId,
-        rollback: (commandId: CommandId) =>
+        rollback: (commandId: CommandId, followUpText?: string) =>
           orchestrator.dispatch({
             type: "checkpoint.rollback",
             commandId,
@@ -948,6 +948,17 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
             checkpointId,
             scopeId: scope.id,
             restoreFiles: false,
+            ...(followUpText === undefined
+              ? {}
+              : {
+                  followUp: {
+                    createdBy: "user",
+                    creationSource: "web",
+                    messageId: MessageId.make(`${commandId}-follow-up`),
+                    text: followUpText,
+                    attachments: [],
+                  },
+                }),
           }),
       };
     });
@@ -960,7 +971,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
       const { threadId, rollback } = yield* seedFailingRollbackThread("runtime-rollback-failure");
 
       const rollbackCommandId = CommandId.make("runtime-rollback-failure-rollback");
-      yield* rollback(rollbackCommandId);
+      yield* rollback(rollbackCommandId, "Edited prompt");
       for (let attempt = 0; attempt < 5; attempt++) {
         yield* worker.drain();
         yield* TestClock.adjust("30 seconds");
@@ -973,6 +984,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         requestId: rollbackCommandId,
         message: ROLLBACK_FAILED_MESSAGE,
       });
+      assert.notInclude(
+        failed.messages.map((message) => message.text),
+        "Edited prompt",
+      );
 
       yield* rollback(CommandId.make("runtime-rollback-failure-retry"));
       const retried = yield* orchestrator.getThreadProjection(threadId);

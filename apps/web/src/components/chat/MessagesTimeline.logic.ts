@@ -595,6 +595,8 @@ type MessagesTimelineRowContent =
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
+      /** The latest prompt edits in place; earlier ones use Edit from here. */
+      editInline?: boolean;
       /** Another of your messages follows directly, so the two sit closer together. */
       groupedWithNext?: boolean;
       /** Another of your messages sits directly above, so the joined corners tighten. */
@@ -1432,6 +1434,13 @@ export function deriveMessagesTimelineRows(input: {
         availableRevertTurnCounts: input.availableRevertTurnCounts,
       })
     : new Map<MessageId, number>();
+  const latestPromptId = timelineEntries.findLast(
+    (entry) =>
+      entry.kind === "message" &&
+      entry.message.role === "user" &&
+      entry.projectedItem?.visibility !== "inherited" &&
+      (entry.message.inputIntent === "turn_start" || entry.message.inputIntent === "queued_turn"),
+  )?.id;
   const nextRows: MessagesTimelineRow[] = [];
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
@@ -2051,6 +2060,9 @@ export function deriveMessagesTimelineRows(input: {
         timelineEntry.message.role === "user"
           ? revertTurnCountByUserMessageId.get(timelineEntry.message.id)
           : undefined,
+      editInline:
+        timelineEntry.id === latestPromptId &&
+        revertTurnCountByUserMessageId.has(timelineEntry.message.id),
     });
   }
 
@@ -2508,6 +2520,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount &&
+        a.editInline === bm.editInline &&
         a.groupedWithNext === bm.groupedWithNext &&
         a.groupedWithPrevious === bm.groupedWithPrevious &&
         a.continuesSteer === bm.continuesSteer

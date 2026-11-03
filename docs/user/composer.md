@@ -156,10 +156,15 @@ the text is an unedited recalled prompt, with the caret on the first visual line
 the last visual line for `ArrowDown`, counting wrapped lines. Editing a recalled prompt turns it
 into a normal draft.
 
-## Edit an earlier prompt
+## Edit a prompt
 
-On web and desktop, choose **Edit from here** beneath a sent message to rewind
-the conversation to before that message. Choose **Revert and keep changes** to
+On web and desktop, choose **Edit** beneath your latest prompt to change it in place.
+Press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux, or choose **Send**, to
+rewind the conversation to before that prompt and send your edit with its original
+attachments. Press `Esc` to cancel. Workspace files stay as they are.
+
+Choose **Edit from here** beneath an earlier message to rewind the conversation to
+before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to put the workspace back
 to its checkpoint from before that message. That also undoes edits you made yourself.
 File restore is only offered for threads running in a worktree, and it is

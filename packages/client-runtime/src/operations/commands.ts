@@ -13,6 +13,7 @@ import {
   type NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2RollbackFollowUp,
   type PlanId,
   type ProjectId,
   type ProjectIconOverride,
@@ -209,6 +210,8 @@ export interface DismissThreadUserInputInput extends ThreadCommandInput {
 
 export interface RevertThreadCheckpointInput extends ThreadCommandInput {
   readonly restoreFiles?: boolean;
+  /** Sent once the rewind lands; nothing is sent when it fails. */
+  readonly followUp?: Omit<OrchestrationV2RollbackFollowUp, "createdBy" | "creationSource">;
   readonly checkpointId?: string;
   readonly scopeId?: string;
   readonly turnCount?: number;
@@ -915,12 +918,24 @@ export const dismissThreadUserInput = Effect.fn("EnvironmentCommands.dismissThre
   },
 );
 
+const rollbackFollowUp = (input: RevertThreadCheckpointInput) =>
+  input.followUp === undefined
+    ? {}
+    : {
+        followUp: {
+          ...input.followUp,
+          createdBy: "user" as const,
+          creationSource: input.creationSource ?? "web",
+        },
+      };
+
 export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThreadCheckpoint")(
   function* (input: RevertThreadCheckpointInput) {
     if (input.checkpointId !== undefined && input.scopeId !== undefined) {
       return yield* dispatch({
         type: "checkpoint.rollback",
         ...(input.restoreFiles === undefined ? {} : { restoreFiles: input.restoreFiles }),
+        ...rollbackFollowUp(input),
         commandId: yield* allocateCommandId(input),
         threadId: input.threadId,
         scopeId: CheckpointScopeId.make(input.scopeId),
@@ -950,6 +965,7 @@ export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThrea
     return yield* dispatch({
       type: "checkpoint.rollback",
       ...(input.restoreFiles === undefined ? {} : { restoreFiles: input.restoreFiles }),
+      ...rollbackFollowUp(input),
       commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
       scopeId: checkpoint.scopeId,
