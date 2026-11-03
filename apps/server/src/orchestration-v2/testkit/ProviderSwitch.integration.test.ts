@@ -103,6 +103,8 @@ function makeTestAdapter(input: {
   readonly refusalCause?: unknown;
   readonly failInjectionOnce?: Ref.Ref<boolean>;
   readonly nativeThreadGeneration?: Ref.Ref<number>;
+  /** Like ACP: rollback cannot truncate, so it answers with a fresh, empty native session. */
+  readonly rollbackStartsFreshSession?: boolean;
   readonly failResume?: boolean;
   readonly failResumeOnce?: Ref.Ref<boolean>;
   readonly initialContextUsage?: OrchestrationV2ProviderThread["contextUsage"];
@@ -392,8 +394,29 @@ function makeTestAdapter(input: {
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: () =>
             unimplemented(input.driver, "readThreadSnapshot unused in provider switch test"),
-          rollbackThread: () =>
-            unimplemented(input.driver, "rollbackThread unused in provider switch test"),
+          rollbackThread: ({ providerThread }) =>
+            input.rollbackStartsFreshSession !== true || input.nativeThreadGeneration === undefined
+              ? unimplemented(input.driver, "rollbackThread unused in provider switch test")
+              : Effect.gen(function* () {
+                  const generation = yield* Ref.getAndUpdate(
+                    input.nativeThreadGeneration!,
+                    (value) => value + 1,
+                  );
+                  return {
+                    providerThread: {
+                      ...providerThread,
+                      nativeThreadRef: {
+                        driver: input.driver,
+                        nativeId: `${input.driver}:${providerThread.appThreadId}:${generation}`,
+                        strength: "strong" as const,
+                      },
+                      status: "idle" as const,
+                    },
+                    providerTurns: [],
+                    messages: [],
+                    runtimeRequests: [],
+                  };
+                }),
           forkThread: () =>
             unimplemented(input.driver, "forkThread unused in provider switch test"),
         };
@@ -1887,6 +1910,107 @@ describe("orchestration v2 provider switching", () => {
             ),
           );
         }
+      }),
+    ),
+  );
+
+  it.live("hands the kept turns to the fresh session an ACP rewind starts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("acp-rewind-keeps-context");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const rewindThreadId = ThreadId.make("thread:acp-rewind-keeps-context");
+        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+          makeTestAdapter({
+            instanceId: GROK_MODEL_SELECTION.instanceId,
+            driver: GROK_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            modelSelection: GROK_MODEL_SELECTION,
+            responseByRunOrdinal: { 1: "Kept answer", 2: "Rewound answer" },
+            capturedTurns,
+            nativeThreadGeneration: yield* Ref.make(0),
+            rollbackStartsFreshSession: true,
+          }),
+        ]);
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const send = Effect.fn("sendAndSettle")(function* (ordinal: number, text: string) {
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`acp-rewind:${ordinal}`),
+              threadId: rewindThreadId,
+              messageId: MessageId.make(`acp-rewind:${ordinal}`),
+              createdBy: "user",
+              creationSource: "web",
+              text,
+              attachments: [],
+              modelSelection: GROK_MODEL_SELECTION,
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* waitForIdle(rewindThreadId);
+            yield* worker.drain();
+          });
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("acp-rewind:create"),
+            threadId: rewindThreadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "ACP rewind",
+            modelSelection: GROK_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: cwd,
+          });
+          yield* send(1, "Kept prompt");
+          yield* send(2, "Rewound prompt");
+          const beforeRewind = yield* orchestrator.getThreadProjection(rewindThreadId);
+          const keptCheckpoint = beforeRewind.checkpoints.find(
+            (checkpoint) => checkpoint.appRunOrdinal === 1,
+          );
+          assert.isDefined(keptCheckpoint);
+          yield* orchestrator.dispatch({
+            type: "checkpoint.rollback",
+            restoreFiles: false,
+            commandId: CommandId.make("acp-rewind:rollback"),
+            threadId: rewindThreadId,
+            scopeId: keptCheckpoint.scopeId,
+            checkpointId: keptCheckpoint.id,
+          });
+          yield* worker.drain();
+          yield* send(3, "What did I say first?");
+          yield* send(4, "And then?");
+
+          const projection = yield* orchestrator.getThreadProjection(rewindThreadId);
+          assert.deepEqual(
+            projection.runs.map((run) => run.status),
+            ["completed", "rolled_back", "completed", "completed"],
+          );
+          const turns = yield* Ref.get(capturedTurns);
+          assert.lengthOf(turns, 4);
+          assert.notEqual(turns[2]?.nativeThreadId, turns[0]?.nativeThreadId);
+          assert.include(turns[2]?.text, "Kept prompt");
+          assert.include(turns[2]?.text, "Kept answer");
+          assert.notInclude(turns[2]?.text, "Rewound");
+          assert.equal(turns[3]?.text, "And then?");
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: "acp-rewind-keeps-context",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: { type: "readOnly" },
+                },
+              },
+              layerRegistry,
+            ),
+          ),
+        );
       }),
     ),
   );

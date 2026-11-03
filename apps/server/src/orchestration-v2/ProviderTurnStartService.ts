@@ -1096,7 +1096,10 @@ export const layer: Layer.Layer<
               (item) =>
                 item.runId === null ||
                 projection.runs.some(
-                  (source) => source.id === item.runId && source.ordinal < run.ordinal,
+                  (source) =>
+                    source.id === item.runId &&
+                    source.ordinal < run.ordinal &&
+                    source.status !== "rolled_back",
                 ),
             ),
             createdAt,
@@ -1114,6 +1117,82 @@ export const layer: Layer.Layer<
           handoff,
           ...effectiveHandoffs.filter((candidate) => candidate.targetRunId === run.id),
         ];
+      };
+      const adoptRecoveryHandoff = Effect.fn("ProviderTurnStartService.adoptRecoveryHandoff")(
+        function* () {
+          const { handoff, transferId, createdAt } = yield* recoveryHandoff;
+          effectiveHandoffs = withRecoveryHandoff(handoff);
+          resumeFellBack = true;
+          yield* eventSink.write({
+            events: [
+              {
+                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
+                type: "context-handoff.updated",
+                threadId: projection.thread.id,
+                runId: run.id,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: createdAt,
+                payload: handoff,
+              },
+              {
+                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
+                type: "context-transfer.updated",
+                threadId: projection.thread.id,
+                runId: run.id,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: createdAt,
+                payload: {
+                  id: transferId,
+                  type: "provider_handoff",
+                  sourceThreadId: projection.thread.id,
+                  targetThreadId: projection.thread.id,
+                  sourcePoint: { threadId: projection.thread.id },
+                  basePoint: null,
+                  sourceProviderInstanceId: providerThread.providerInstanceId,
+                  targetProviderInstanceId: run.providerInstanceId,
+                  targetRunId: run.id,
+                  status: "resolved_portable",
+                  resolution: { strategy: "portable_context", contextHandoffId: handoff.id },
+                  createdBy: "system",
+                  error: null,
+                  createdAt,
+                  updatedAt: createdAt,
+                  consumedAt: null,
+                },
+              },
+            ],
+          });
+        },
+      );
+      // Without native truncation a rewind leaves the provider an empty session, which then
+      // holds none of the turns the thread kept.
+      const rewoundToEmptySession = (loaded: OrchestrationV2ProviderThread) => {
+        if (session.providerSession.capabilities.checkpointing.providerCanRollbackConversation)
+          return false;
+        const nativeThreadId = loaded.nativeThreadRef?.nativeId;
+        const acceptedAttemptIds = new Set(
+          projection.providerTurns.map((turn) => turn.runAttemptId),
+        );
+        const keptRuns = projection.runs.some(
+          (source) =>
+            source.providerThreadId === providerThread.id &&
+            source.ordinal < run.ordinal &&
+            source.status !== "rolled_back" &&
+            acceptedAttemptIds.has(source.activeAttemptId),
+        );
+        const sessionHoldsHistory =
+          projection.attempts.some(
+            (source) =>
+              source.providerThreadId === providerThread.id &&
+              acceptedAttemptIds.has(source.id) &&
+              (source.nativeThreadId === undefined || source.nativeThreadId === nativeThreadId),
+          ) ||
+          projection.contextHandoffs.some(
+            (handoff) =>
+              handoff.toProviderThreadId === providerThread.id &&
+              handoff.delivery?.nativeThreadId === nativeThreadId,
+          );
+        return keptRuns && !sessionHoldsHistory;
       };
       let resumedRetryHandoff: ReadonlyArray<OrchestrationV2ContextHandoff> | undefined;
       let resumedHandoffContext: ReturnType<typeof handoffContextForThread> | undefined;
@@ -1267,6 +1346,10 @@ export const layer: Layer.Layer<
                 runtimePolicy: resolvedRuntimePolicy,
               }),
         );
+        if (resumed._tag === "Success" && rewoundToEmptySession(resumed.success)) {
+          yield* adoptRecoveryHandoff();
+          return resumed.success;
+        }
         if (resumed._tag === "Success") {
           const context = handoffContextForThread(resumed.success);
           context.budget = yield* Effect.cached(context.budget);
@@ -1347,48 +1430,7 @@ export const layer: Layer.Layer<
           }),
         );
         if (replacement === undefined) return undefined;
-        const { handoff, transferId, createdAt } = yield* recoveryHandoff;
-        effectiveHandoffs = withRecoveryHandoff(handoff);
-        resumeFellBack = true;
-        yield* eventSink.write({
-          events: [
-            {
-              id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-              type: "context-handoff.updated",
-              threadId: projection.thread.id,
-              runId: run.id,
-              providerInstanceId: run.providerInstanceId,
-              occurredAt: createdAt,
-              payload: handoff,
-            },
-            {
-              id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-              type: "context-transfer.updated",
-              threadId: projection.thread.id,
-              runId: run.id,
-              providerInstanceId: run.providerInstanceId,
-              occurredAt: createdAt,
-              payload: {
-                id: transferId,
-                type: "provider_handoff",
-                sourceThreadId: projection.thread.id,
-                targetThreadId: projection.thread.id,
-                sourcePoint: { threadId: projection.thread.id },
-                basePoint: null,
-                sourceProviderInstanceId: providerThread.providerInstanceId,
-                targetProviderInstanceId: run.providerInstanceId,
-                targetRunId: run.id,
-                status: "resolved_portable",
-                resolution: { strategy: "portable_context", contextHandoffId: handoff.id },
-                createdBy: "system",
-                error: null,
-                createdAt,
-                updatedAt: createdAt,
-                consumedAt: null,
-              },
-            },
-          ],
-        });
+        yield* adoptRecoveryHandoff();
         return replacement;
       });
       if (loadedProviderThread === undefined) return;
