@@ -4,6 +4,9 @@ import {
   CheckpointScopeId,
   MessageId,
   NodeId,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ProviderThreadId,
   RunId,
   ThreadId,
   type OrchestrationV2Checkpoint,
@@ -12,7 +15,12 @@ import {
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveThreadCheckpointSummaries } from "./threadCheckpoints.ts";
+import type { ThreadStructure } from "./models.ts";
+import {
+  deriveAvailableRevertTurnCounts,
+  deriveRewindTurnCountByRunId,
+  deriveThreadCheckpointSummaries,
+} from "./threadCheckpoints.ts";
 
 function checkpoint(
   run: string,
@@ -254,4 +262,83 @@ describe("deriveThreadCheckpointSummaries", () => {
       expect(metadataVisits).toBeLessThanOrEqual(messages.length);
     },
   );
+});
+
+describe("rewind targets", () => {
+  const providerThreadId = ProviderThreadId.make("provider-thread");
+  const otherProviderThreadId = ProviderThreadId.make("other-provider-thread");
+  const instanceId = ProviderInstanceId.make("codex");
+
+  function structure(input: {
+    readonly providerSessionId: ProviderSessionId | null;
+    readonly rolledBack?: ReadonlyArray<number>;
+  }) {
+    const run = (ordinal: number) => ({
+      id: RunId.make(`run-${ordinal}`),
+      ordinal,
+      activeAttemptId: `attempt-${ordinal}`,
+      status: input.rolledBack?.includes(ordinal) ? "rolled_back" : "completed",
+    });
+    const turn = (ordinal: number, attempt: number, threadId: ProviderThreadId) => ({
+      id: `turn-${attempt}-${ordinal}`,
+      runAttemptId: `attempt-${attempt}`,
+      ordinal,
+      providerThreadId: threadId,
+    });
+    return {
+      thread: { activeProviderThreadId: providerThreadId, modelSelection: { instanceId } },
+      providerThreads: [
+        {
+          id: providerThreadId,
+          providerInstanceId: instanceId,
+          providerSessionId: input.providerSessionId,
+        },
+      ],
+      runs: [run(1), run(2), run(3), run(4)],
+      attempts: [1, 2, 3, 4].map((ordinal) => ({ id: `attempt-${ordinal}`, providerTurnId: null })),
+      // Run 2's latest turn moved to another provider thread, so its checkpoint cannot restore
+      // this conversation.
+      providerTurns: [
+        turn(1, 1, providerThreadId),
+        turn(1, 2, providerThreadId),
+        turn(2, 2, otherProviderThreadId),
+        turn(1, 3, providerThreadId),
+        turn(1, 4, providerThreadId),
+      ],
+      checkpoints: [
+        checkpoint("start", { appRunOrdinal: null, ordinalWithinScope: 0 }),
+        ...[1, 2, 3, 4].map((ordinal) =>
+          checkpoint(`run-${ordinal}`, { appRunOrdinal: ordinal, ordinalWithinScope: ordinal }),
+        ),
+      ],
+    } as unknown as ThreadStructure;
+  }
+
+  it("offers the thread start and runs whose latest turn is on the active provider thread", () => {
+    const available = deriveAvailableRevertTurnCounts(
+      structure({ providerSessionId: ProviderSessionId.make("session") }),
+    );
+    expect([...available].toSorted()).toEqual([0, 1, 3, 4]);
+  });
+
+  it("offers nothing without a provider session to rewind", () => {
+    expect(deriveAvailableRevertTurnCounts(structure({ providerSessionId: null })).size).toBe(0);
+    expect(deriveAvailableRevertTurnCounts(null).size).toBe(0);
+    expect(deriveRewindTurnCountByRunId(structure({ providerSessionId: null })).size).toBe(0);
+  });
+
+  it("rewinds each prompt to the kept run before it, skipping rewound runs", () => {
+    const session = ProviderSessionId.make("session");
+    expect([...deriveRewindTurnCountByRunId(structure({ providerSessionId: session }))]).toEqual([
+      [RunId.make("run-1"), 0],
+      [RunId.make("run-2"), 1],
+      [RunId.make("run-4"), 3],
+    ]);
+    expect([
+      ...deriveRewindTurnCountByRunId(structure({ providerSessionId: session, rolledBack: [3] })),
+    ]).toEqual([
+      [RunId.make("run-1"), 0],
+      [RunId.make("run-2"), 1],
+    ]);
+  });
 });

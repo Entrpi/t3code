@@ -4,10 +4,14 @@ import type {
   CheckpointScopeId,
   MessageId,
   OrchestrationV2CheckpointFileTotals,
+  OrchestrationV2ProviderTurn,
   OrchestrationV2ThreadProjection,
+  RunAttemptId,
   RunId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+
+import type { ThreadStructure } from "./models.ts";
 
 export interface ThreadCheckpointSummary {
   readonly checkpointId?: CheckpointId;
@@ -88,4 +92,71 @@ export function checkpointFileTotals(
     deletions += file.deletions;
   }
   return { count: checkpoint.files.length, additions, deletions };
+}
+
+/**
+ * Run ordinals the conversation can be reverted to: those whose provider turn belongs to the
+ * active provider thread, plus 0 for the thread start. Empty without a live provider session
+ * on the thread's selected instance.
+ */
+export function deriveAvailableRevertTurnCounts(projection: ThreadStructure | null) {
+  const available = new Set<number>();
+  const providerThread = projection?.providerThreads.find(
+    (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+  );
+  if (
+    !providerThread?.providerSessionId ||
+    providerThread.providerInstanceId !== projection?.thread.modelSelection.instanceId
+  )
+    return available;
+  available.add(0);
+  const attemptsById = new Map(projection.attempts.map((attempt) => [attempt.id, attempt]));
+  const providerTurnsById = new Map<
+    OrchestrationV2ProviderTurn["id"],
+    OrchestrationV2ProviderTurn
+  >();
+  const latestTurnByAttempt = new Map<RunAttemptId, OrchestrationV2ProviderTurn>();
+  for (const turn of projection.providerTurns) {
+    providerTurnsById.set(turn.id, turn);
+    if (turn.runAttemptId === null) continue;
+    const latest = latestTurnByAttempt.get(turn.runAttemptId);
+    if (latest === undefined || turn.ordinal > latest.ordinal) {
+      latestTurnByAttempt.set(turn.runAttemptId, turn);
+    }
+  }
+  for (const run of projection.runs) {
+    if (run.activeAttemptId === null) continue;
+    const attempt = attemptsById.get(run.activeAttemptId);
+    const providerTurn =
+      latestTurnByAttempt.get(run.activeAttemptId) ??
+      (attempt?.providerTurnId == null ? undefined : providerTurnsById.get(attempt.providerTurnId));
+    // A ready file checkpoint alone cannot restore the provider conversation.
+    if (providerTurn?.providerThreadId === providerThread.id) available.add(run.ordinal);
+  }
+  return available;
+}
+
+/**
+ * Where Edit from here on each run's prompt rewinds to: the run before it that was kept (0 for
+ * the thread start), when that point has a ready checkpoint and the conversation can return to it.
+ */
+export function deriveRewindTurnCountByRunId(
+  projection: ThreadStructure | null,
+): ReadonlyMap<RunId, number> {
+  const targets = new Map<RunId, number>();
+  if (projection === null) return targets;
+  const available = deriveAvailableRevertTurnCounts(projection);
+  const ready = new Set<number>();
+  for (const checkpoint of projection.checkpoints) {
+    if (checkpoint.status !== "ready") continue;
+    if (checkpoint.appRunOrdinal !== null) ready.add(checkpoint.appRunOrdinal);
+    else if (checkpoint.ordinalWithinScope === 0) ready.add(0);
+  }
+  let previous = 0;
+  for (const run of [...projection.runs].sort((left, right) => left.ordinal - right.ordinal)) {
+    if (run.status === "rolled_back") continue;
+    if (available.has(previous) && ready.has(previous)) targets.set(run.id, previous);
+    previous = run.ordinal;
+  }
+  return targets;
 }

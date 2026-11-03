@@ -41,7 +41,10 @@ import {
   resolveUserMessagePresentation,
 } from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
-import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+import {
+  deriveRewindTurnCountByRunId,
+  type ThreadCheckpointSummary,
+} from "@t3tools/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
@@ -175,6 +178,7 @@ import { CopyTextButton } from "./CopyTextButton";
 import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
 import { Menu } from "../../components/ui/Menu";
+import { useQuietThreadStructure } from "../../state/use-thread-detail";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { copyPromptLink } from "../prompt-links/prompt-link-actions";
 import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
@@ -210,6 +214,7 @@ import {
   isSecretRequestActivityGroup,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
+  type ThreadFeedMessage,
   messageFoldRunId,
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
@@ -346,6 +351,8 @@ export interface ThreadFeedProps {
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
   readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
+  /** Rewinds the thread to before this prompt; `turnCount` is the run ordinal to return to. */
+  readonly onEditFromHere?: ((message: ThreadFeedMessage, turnCount: number) => void) | null;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   /** Null while the thread's creation is queued: reading detail then caches a not-found as deleted. */
@@ -1665,6 +1672,7 @@ function renderFeedEntry(
     | "skills"
     | "dispatchingMessageId"
     | "onEditPendingMessage"
+    | "onEditFromHere"
     | "threadId"
     | "workspaceRoot"
   > & {
@@ -1676,6 +1684,7 @@ function renderFeedEntry(
     readonly unsettledTurnId: RunId | null;
     readonly compactionLabelsByEntryId: ReadonlyMap<string, { title: string; compacting: string }>;
     readonly failedRunIds: ReadonlySet<RunId>;
+    readonly rewindTurnCountByRunId: ReadonlyMap<RunId, number>;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string, anchorKey?: string) => void;
     readonly onToggleWorkRow: (rowId: string, anchorKey?: string, groupId?: string) => void;
@@ -1981,6 +1990,16 @@ function renderFeedEntry(
             context: message.context,
           })
         : null;
+      const rewindTurnCount =
+        props.onEditFromHere != null &&
+        props.unsettledTurnId === null &&
+        foldRowId === null &&
+        presentation.attribution !== "guest" &&
+        message.visibility !== "inherited" &&
+        (message.inputIntent === "turn_start" || message.inputIntent === "queued_turn") &&
+        message.runId !== null
+          ? props.rewindTurnCountByRunId.get(message.runId)
+          : undefined;
       const hasBubble =
         fileCards === null &&
         (foldRowId !== null ||
@@ -2219,6 +2238,17 @@ function renderFeedEntry(
                   <SymbolView name="pencil" size={14} tintColor={iconSubtleColor} />
                 </Pressable>
               ) : null}
+              {rewindTurnCount === undefined ? null : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit from here"
+                  hitSlop={8}
+                  className="size-7 items-center justify-center"
+                  onPress={() => props.onEditFromHere?.(message, rewindTurnCount)}
+                >
+                  <SymbolView name="pencil" size={14} tintColor={iconSubtleColor} />
+                </Pressable>
+              )}
               {presentation.text.trim().length > 0 ? (
                 <UserMessageCopyButton
                   text={presentation.text}
@@ -2660,6 +2690,7 @@ export const ThreadFeed = memo(function ThreadFeed({
 }: ThreadFeedProps & { readonly ref?: Ref<ThreadFeedHandle> }) {
   const { listRef, onEndFollowEnabledChange, onHeaderMaterialVisibilityChange } = props;
   const workflowOpening = useWorkflowOpening(props.detailRef);
+  const threadStructure = useQuietThreadStructure(props.detailRef);
   const guestShare = useThreadGuestShare(props.detailRef);
   const deviceType = useDeviceType();
   const duoColumns = useNativeWorkspaceColumnsSupported() && isDuoDevice(deviceType);
@@ -3440,6 +3471,7 @@ export const ThreadFeed = memo(function ThreadFeed({
     { anchorOffset: anchorTopInset + CHAT_LIST_ANCHOR_OFFSET },
   );
   const failedRunIds = failedFeedRunIds(props.feed, props.latestRun);
+  const rewindTurnCountByRunId = deriveRewindTurnCountByRunId(threadStructure?.projection ?? null);
   const terminalAssistantMessageIds = (() => {
     const terminalIdsByTurn = new Map<RunId, string>();
     for (const entry of props.feed) {
@@ -3745,6 +3777,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             environmentId: props.environmentId,
             dispatchingMessageId: props.dispatchingMessageId,
             onEditPendingMessage: props.onEditPendingMessage,
+            onEditFromHere: props.onEditFromHere,
             onUseArtifactTemplate: props.onUseArtifactTemplate,
             threadId: props.threadId,
             copiedRowId,
@@ -3755,6 +3788,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             unsettledTurnId,
             compactionLabelsByEntryId,
             failedRunIds,
+            rewindTurnCountByRunId,
             onCopyWorkRow,
             onToggleWorkGroup,
             onToggleWorkRow,

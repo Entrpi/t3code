@@ -1,4 +1,3 @@
-import { type OrchestrationV2ProviderTurn, type RunAttemptId } from "@t3tools/contracts";
 import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
@@ -1572,46 +1571,4 @@ export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure |
       pullRequests: projection.thread.pullRequests,
     }),
   ];
-}
-
-/**
- * Run ordinals the conversation can be reverted to: those whose provider turn belongs to the
- * active provider thread, plus 0 for the thread start. Empty without a live provider session
- * on the thread's selected instance.
- */
-export function deriveAvailableRevertTurnCounts(projection: ThreadStructure | null) {
-  const available = new Set<number>();
-  const providerThread = projection?.providerThreads.find(
-    (candidate) => candidate.id === projection.thread.activeProviderThreadId,
-  );
-  if (
-    !providerThread?.providerSessionId ||
-    providerThread.providerInstanceId !== projection?.thread.modelSelection.instanceId
-  )
-    return available;
-  available.add(0);
-  const attemptsById = new Map(projection.attempts.map((attempt) => [attempt.id, attempt]));
-  const providerTurnsById = new Map<
-    OrchestrationV2ProviderTurn["id"],
-    OrchestrationV2ProviderTurn
-  >();
-  const latestTurnByAttempt = new Map<RunAttemptId, OrchestrationV2ProviderTurn>();
-  for (const turn of projection.providerTurns) {
-    providerTurnsById.set(turn.id, turn);
-    if (turn.runAttemptId === null) continue;
-    const latest = latestTurnByAttempt.get(turn.runAttemptId);
-    if (latest === undefined || turn.ordinal > latest.ordinal) {
-      latestTurnByAttempt.set(turn.runAttemptId, turn);
-    }
-  }
-  for (const run of projection.runs) {
-    if (run.activeAttemptId === null) continue;
-    const attempt = attemptsById.get(run.activeAttemptId);
-    const providerTurn =
-      latestTurnByAttempt.get(run.activeAttemptId) ??
-      (attempt?.providerTurnId == null ? undefined : providerTurnsById.get(attempt.providerTurnId));
-    // A ready file checkpoint alone cannot restore the provider conversation.
-    if (providerTurn?.providerThreadId === providerThread.id) available.add(run.ordinal);
-  }
-  return available;
 }
