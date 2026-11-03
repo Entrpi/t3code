@@ -202,7 +202,6 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       },
     }),
     setup: { canAuthenticate: true, canInstall: true },
-    supportsConversationRollback: false,
     supportsTextGeneration: false,
     workspaceSnapshots: [],
   } satisfies ServerProviderDraft;

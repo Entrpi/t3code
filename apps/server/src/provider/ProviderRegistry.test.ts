@@ -34,6 +34,7 @@ import {
   ServerSettings,
   ServerSettingsError,
   ServerProvider,
+  type OrchestrationV2ProviderCapabilities,
   type ServerProviderSlashCommand,
   type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
@@ -74,6 +75,9 @@ import type {
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { AcpProviderCapabilitiesV2 } from "@t3tools/provider-acp/server/adapter";
+import { CursorProviderCapabilitiesV2 } from "@t3tools/provider-cursor/testing";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
@@ -108,6 +112,14 @@ const withBundledCompatibility = (snapshot: ServerProvider) =>
     undefined,
     ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
   );
+
+const orchestrationAdapterWith = (capabilities: OrchestrationV2ProviderCapabilities) => {
+  const adapter: Pick<ProviderInstance["orchestrationAdapter"], "getCapabilities"> = {
+    getCapabilities: () => Effect.succeed(capabilities),
+  };
+  return adapter as ProviderInstance["orchestrationAdapter"];
+};
+const codexOrchestrationAdapter = orchestrationAdapterWith(CodexProviderCapabilitiesV2);
 
 const layerUnusedMutator = Layer.mock(
   ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
@@ -1096,7 +1108,7 @@ it.layer(
                 streamChanges: Stream.empty,
                 applyUsageLimits: () => Effect.void,
               },
-              orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+              orchestrationAdapter: codexOrchestrationAdapter,
               textGeneration: {} as ProviderInstance["textGeneration"],
             } satisfies ProviderInstance;
             const layerInstanceRegistry = Layer.succeed(
@@ -1235,7 +1247,7 @@ it.layer(
               streamChanges: Stream.empty,
               applyUsageLimits: () => Effect.void,
             },
-            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            orchestrationAdapter: codexOrchestrationAdapter,
             textGeneration: {} as ProviderInstance["textGeneration"],
           } satisfies ProviderInstance;
           const layerInstanceRegistry = Layer.succeed(
@@ -1536,7 +1548,7 @@ it.layer(
                 applyUsageLimits: () => Effect.void,
               },
               invalidateCaches: Ref.update(invalidations, (count) => count + 1),
-              orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+              orchestrationAdapter: codexOrchestrationAdapter,
               textGeneration: {} as ProviderInstance["textGeneration"],
             } satisfies ProviderInstance;
             const takeMaintenanceReads = Ref.getAndSet(maintenanceReads, []);
@@ -1673,7 +1685,7 @@ it.layer(
                 Effect.andThen(Deferred.await(releaseScan)),
                 Effect.as(provider),
               ),
-            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            orchestrationAdapter: codexOrchestrationAdapter,
             textGeneration: {} as ProviderInstance["textGeneration"],
           };
           const layerInstanceRegistry = Layer.succeed(
@@ -1769,7 +1781,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           snapshotForCwd: () => Ref.get(scanResult),
-          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          orchestrationAdapter: codexOrchestrationAdapter,
           textGeneration: {} as ProviderInstance["textGeneration"],
         };
         const layerInstanceRegistry = Layer.succeed(
@@ -1844,6 +1856,90 @@ it.layer(
       }),
     );
 
+    it.effect("offers Edit from here exactly where the rollback policy accepts it", () =>
+      Effect.gen(function* () {
+        const instanceFor = (
+          id: string,
+          capabilities: OrchestrationV2ProviderCapabilities,
+        ): ProviderInstance => {
+          const driver = ProviderDriverKind.make(id);
+          const provider = {
+            instanceId: ProviderInstanceId.make(id),
+            driver,
+            status: "ready",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            checkedAt: "2026-06-10T00:00:00.000Z",
+            version: "1.0.0",
+            models: [],
+            slashCommands: [],
+            skills: [],
+          } as const satisfies ServerProvider;
+          return {
+            instanceId: provider.instanceId,
+            driverKind: driver,
+            continuationIdentity: { driverKind: driver, continuationKey: `${id}:instance:${id}` },
+            displayName: undefined,
+            enabled: true,
+            snapshot: {
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: driver,
+                    packageName: null,
+                  }),
+                ),
+              getSnapshot: Effect.succeed(provider),
+              refresh: Effect.succeed(provider),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+            },
+            orchestrationAdapter: orchestrationAdapterWith(capabilities),
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          };
+        };
+        // Grok and the other ACP agents rewind into a fresh session; Cursor cannot rewind.
+        const instances = [
+          instanceFor("acp", AcpProviderCapabilitiesV2),
+          instanceFor("cursor", CursorProviderCapabilitiesV2),
+        ];
+        const layerInstanceRegistry = Layer.succeed(
+          ProviderInstanceRegistry.ProviderInstanceRegistry,
+          {
+            getInstance: (requestedId) =>
+              Effect.succeed(instances.find((instance) => instance.instanceId === requestedId)),
+            listInstances: Effect.succeed(instances),
+            listUnavailable: Effect.succeed([]),
+            streamChanges: Stream.empty,
+            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+          },
+        );
+        const scope = yield* Scope.make();
+        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+        const runtimeServices = yield* Layer.build(
+          ProviderRegistry.layer.pipe(
+            Layer.provide(layerUnusedMutator),
+            Layer.provideMerge(layerInstanceRegistry),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "t3-provider-registry-rewind-" }),
+            ),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          ),
+        ).pipe(Scope.provide(scope));
+
+        const providers = yield* Effect.flatMap(ProviderRegistry.ProviderRegistry, (registry) =>
+          registry.refresh(),
+        ).pipe(Effect.provide(runtimeServices));
+        assert.deepStrictEqual(
+          providers.map(
+            (provider) => `${provider.instanceId}: ${provider.supportsConversationRollback}`,
+          ),
+          ["cursor: false", "acp: true"],
+        );
+      }),
+    );
+
     it.effect("shares one in-flight pass between concurrent untargeted refreshes", () =>
       Effect.gen(function* () {
         const driver = ProviderDriverKind.make("codex");
@@ -1889,7 +1985,7 @@ it.layer(
               streamChanges: Stream.empty,
               applyUsageLimits: () => Effect.void,
             },
-            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            orchestrationAdapter: codexOrchestrationAdapter,
             textGeneration: {} as ProviderInstance["textGeneration"],
           },
         ] satisfies ReadonlyArray<ProviderInstance>;
@@ -1989,7 +2085,7 @@ it.layer(
                 streamChanges: Stream.empty,
                 applyUsageLimits: () => Effect.void,
               },
-              orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+              orchestrationAdapter: codexOrchestrationAdapter,
               textGeneration: {} as ProviderInstance["textGeneration"],
             }) satisfies ProviderInstance;
           const retiredInstance = makeInstance(
@@ -2132,7 +2228,7 @@ it.layer(
             streamChanges: Stream.fromPubSub(changes),
             applyUsageLimits: () => Effect.void,
           },
-          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          orchestrationAdapter: codexOrchestrationAdapter,
           textGeneration: {} as ProviderInstance["textGeneration"],
         } satisfies ProviderInstance;
         const instanceRegistryLayer = Layer.succeed(
@@ -2255,7 +2351,7 @@ it.layer(
             streamChanges: Stream.fromPubSub(changes),
             applyUsageLimits: () => Effect.void,
           },
-          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          orchestrationAdapter: codexOrchestrationAdapter,
           textGeneration: {} as ProviderInstance["textGeneration"],
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
@@ -2308,6 +2404,7 @@ it.layer(
             withBundledCompatibility({
               ...refreshedProvider,
               models: [...initialProvider.models],
+              supportsConversationRollback: true,
             }),
           );
         }).pipe(Effect.provide(runtimeServices));
@@ -2356,7 +2453,7 @@ it.layer(
             streamChanges: Stream.fromPubSub(changes),
             applyUsageLimits: () => Effect.void,
           },
-          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          orchestrationAdapter: codexOrchestrationAdapter,
           textGeneration: {} as ProviderInstance["textGeneration"],
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
@@ -2545,7 +2642,7 @@ it.layer(
               streamChanges: Stream.fromPubSub(changes),
               applyUsageLimits: () => Effect.void,
             },
-            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            orchestrationAdapter: codexOrchestrationAdapter,
             textGeneration: {} as ProviderInstance["textGeneration"],
           } satisfies ProviderInstance;
           const layerInstanceRegistry = Layer.succeed(
@@ -2649,7 +2746,7 @@ it.layer(
             streamChanges: Stream.empty,
             applyUsageLimits: () => Effect.void,
           },
-          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          orchestrationAdapter: codexOrchestrationAdapter,
           textGeneration: {} as ProviderInstance["textGeneration"],
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
@@ -2684,15 +2781,13 @@ it.layer(
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry.ProviderRegistry;
 
-          assert.deepStrictEqual(yield* registry.getProviders, [
-            withBundledCompatibility(cachedProvider),
-          ]);
-          assert.deepStrictEqual(yield* registry.refresh(codexDriver), [
-            withBundledCompatibility(cachedProvider),
-          ]);
-          assert.deepStrictEqual(yield* registry.refreshInstance(codexInstanceId), [
-            withBundledCompatibility(cachedProvider),
-          ]);
+          const expected = withBundledCompatibility({
+            ...cachedProvider,
+            supportsConversationRollback: true,
+          });
+          assert.deepStrictEqual(yield* registry.getProviders, [expected]);
+          assert.deepStrictEqual(yield* registry.refresh(codexDriver), [expected]);
+          assert.deepStrictEqual(yield* registry.refreshInstance(codexInstanceId), [expected]);
         }).pipe(Effect.provide(runtimeServices));
       }),
     );

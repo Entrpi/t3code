@@ -47,6 +47,7 @@ import {
   latestProviderVersionCacheKeys,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import type { ProviderSnapshotSource } from "./builtInProviderCatalog.ts";
+import { canRewindConversation } from "../orchestration-v2/CommandPolicy.ts";
 
 export type ProviderMaintenanceActionKind = "update";
 
@@ -337,13 +338,24 @@ const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
 };
 
 // Rebuilt instances have new PubSubs; capture their fresh closures instead of a closed source.
-const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource => ({
-  instanceId: instance.instanceId,
-  driverKind: instance.driverKind,
-  getSnapshot: instance.snapshot.getSnapshot,
-  refresh: instance.snapshot.refresh,
-  streamChanges: instance.snapshot.streamChanges,
-});
+const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource => {
+  // Edit from here is offered exactly where the rollback policy will accept it.
+  const withRewind = (snapshot: ServerProvider) =>
+    instance.orchestrationAdapter.getCapabilities().pipe(
+      Effect.map((capabilities): ServerProvider => ({
+        ...snapshot,
+        supportsConversationRollback: canRewindConversation(capabilities),
+      })),
+      Effect.orElseSucceed(() => snapshot),
+    );
+  return {
+    instanceId: instance.instanceId,
+    driverKind: instance.driverKind,
+    getSnapshot: instance.snapshot.getSnapshot.pipe(Effect.flatMap(withRewind)),
+    refresh: instance.snapshot.refresh.pipe(Effect.flatMap(withRewind)),
+    streamChanges: instance.snapshot.streamChanges.pipe(Stream.mapEffect(withRewind)),
+  };
+};
 
 export const layer = Layer.effect(
   ProviderRegistry,
