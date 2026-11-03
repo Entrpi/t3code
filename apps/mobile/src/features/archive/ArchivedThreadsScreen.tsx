@@ -255,6 +255,7 @@ function ArchivedThreadRow(props: {
       backgroundColor={cardColor}
       containerStyle={containerStyle}
       fullSwipeWidth={windowWidth - 32}
+      confirmDeleteInPlace
       onDelete={props.onDelete}
       onSwipeableClose={props.onSwipeableClose}
       onSwipeableWillOpen={props.onSwipeableWillOpen}

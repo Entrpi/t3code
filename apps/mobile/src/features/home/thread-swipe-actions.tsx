@@ -82,16 +82,31 @@ function swipeActionsWidth(hasSecondaryAction: boolean) {
 function resolveSecondaryAction(input: {
   readonly close: () => void;
   readonly onDelete: () => void;
+  /** Set when Delete asks in place: the first press arms it, the second deletes. */
+  readonly deleteConfirm: { readonly armed: boolean; readonly arm: () => void } | undefined;
   readonly secondaryAction: ThreadSwipeAction | null | undefined;
   readonly threadTitle: string;
 }): ThreadSwipeSecondaryAction | null {
   if (input.secondaryAction === null) return null;
   if (input.secondaryAction === undefined) {
+    const { deleteConfirm } = input;
+    if (deleteConfirm !== undefined && !deleteConfirm.armed) {
+      return {
+        accessibilityLabel: `Delete ${input.threadTitle}`,
+        tone: "danger",
+        icon: "trash",
+        label: "Delete",
+        onPress: deleteConfirm.arm,
+      };
+    }
     return {
-      accessibilityLabel: `Delete ${input.threadTitle}`,
+      accessibilityLabel:
+        deleteConfirm === undefined
+          ? `Delete ${input.threadTitle}`
+          : `Confirm permanent delete of ${input.threadTitle}`,
       tone: "danger",
       icon: "trash",
-      label: "Delete",
+      label: deleteConfirm === undefined ? "Delete" : "Confirm",
       onPress: () => {
         input.close();
         input.onDelete();
@@ -224,6 +239,8 @@ interface ThreadSwipeableProps {
   readonly fullSwipeAction?: "delete" | "primary";
   readonly fullSwipeWidth: number;
   readonly onDelete: () => void;
+  /** Delete asks in place instead of the caller confirming; a full swipe arms it rather than deleting. */
+  readonly confirmDeleteInPlace?: boolean;
   readonly onSwipeableClose?: (methods: SwipeableMethods) => void;
   readonly onSwipeableWillOpen?: (methods: SwipeableMethods) => void;
   readonly primaryAction: ThreadSwipeAction;
@@ -256,6 +273,8 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
   );
   const contentRef = useRef(content);
   const [isDismissing, setIsDismissing] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const confirmDeleteInPlace = props.confirmDeleteInPlace === true;
   const dismissing = useSharedValue(false);
   const rowHeight = useSharedValue(0);
   const rowWidth = useSharedValue(props.fullSwipeWidth);
@@ -385,11 +404,14 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
   const commitFullSwipe = useCallback(() => {
     if (!mountedRef.current || contentRef.current !== content) return;
     if (fullSwipeAction === "primary") commitPrimaryAction();
-    else {
+    else if (confirmDeleteInPlace) {
+      setDeleteArmed(true);
+      swipeableRef.current?.openRight();
+    } else {
       swipeableRef.current?.close();
       onDelete();
     }
-  }, [commitPrimaryAction, content, fullSwipeAction, onDelete]);
+  }, [commitPrimaryAction, confirmDeleteInPlace, content, fullSwipeAction, onDelete]);
   const handleRelease = useCallback(
     (translation: SharedValue<number>) => {
       "worklet";
@@ -417,6 +439,7 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
     }
   }, [dormant, onSwipeableWillOpen]);
   const handleSwipeableClose = useCallback(() => {
+    setDeleteArmed(false);
     if (swipeableRef.current) onSwipeableClose?.(swipeableRef.current);
   }, [onSwipeableClose]);
   const compactActions = props.compactActions === true;
@@ -442,6 +465,8 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
       primaryAction,
       commitPrimaryAction,
       onDelete,
+      confirmDeleteInPlace,
+      deleteArmed,
       secondaryAction,
       threadTitle,
     ];
@@ -466,6 +491,9 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
           secondaryAction={resolveSecondaryAction({
             close: () => methods.close(),
             onDelete,
+            deleteConfirm: confirmDeleteInPlace
+              ? { armed: deleteArmed, arm: () => setDeleteArmed(true) }
+              : undefined,
             secondaryAction,
             threadTitle,
           })}
