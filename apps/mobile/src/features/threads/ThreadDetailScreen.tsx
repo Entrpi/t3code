@@ -130,7 +130,12 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
-import { getComposerDraftSnapshot } from "../../state/use-composer-drafts";
+import {
+  getComposerDraftSnapshot,
+  mergeComposerDraftContent,
+} from "../../state/use-composer-drafts";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import type { ThreadFeedMessage } from "../../lib/threadActivity";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import {
   ANDROID_READING_MAX_WIDTH,
@@ -362,6 +367,27 @@ const RECONNECT_ERROR_DELAY_MS = 5_000;
 
 // Anchors, the submitted message, follow state and pending scrolls belong to
 // one thread, so the body remounts when the thread changes.
+/** The rewind commits after the command returns; the prompt comes back once its run is gone. */
+function waitForRunRolledBack(ref: ScopedThreadRef, runId: RunId): Promise<void> {
+  const atom = environmentThreadDetails.quietThreadAtom(ref);
+  const rolledBack = () =>
+    appAtomRegistry
+      .get(atom)
+      ?.projection.runs.some((run) => run.id === runId && run.status === "rolled_back") ?? true;
+  return new Promise((resolve) => {
+    if (rolledBack()) return resolve();
+    const done = () => {
+      clearTimeout(timeout);
+      unsubscribe();
+      resolve();
+    };
+    const timeout = setTimeout(done, 30_000);
+    const unsubscribe = appAtomRegistry.subscribe(atom, () => {
+      if (rolledBack()) done();
+    });
+  });
+}
+
 export function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const [statusRequests, setStatusRequests] = useState<
     Record<string, BackgroundWorkStopRequest | undefined>
@@ -1341,6 +1367,42 @@ function ThreadDetailBody(
     }
   };
 
+  const revertThreadCheckpoint = useAtomCommand(
+    threadEnvironment.revertCheckpoint,
+    "edit from here",
+  );
+  const handleEditFromHere = (message: ThreadFeedMessage, turnCount: number) => {
+    const draftKey = props.composerDraftKey;
+    const rewind = async (restoreFiles: boolean) => {
+      const scope = threadScope.current.signal;
+      const result = await revertThreadCheckpoint({
+        environmentId: props.environmentId,
+        input: { threadId: props.selectedThread.id, turnCount, restoreFiles },
+      });
+      if (result._tag !== "Success" || scope.aborted || draftKey === null) return;
+      if (props.selectedThreadDetailRef !== null && message.runId !== null) {
+        await waitForRunRolledBack(props.selectedThreadDetailRef, message.runId);
+      }
+      if (scope.aborted) return;
+      // Attachments stay on the sent message; the prompt text returns below any unsent draft.
+      await mergeComposerDraftContent(draftKey, {
+        text: resolveUserMessagePresentation(message).text,
+        attachments: [],
+        ...(message.context === undefined ? {} : { context: message.context }),
+      });
+      if (!scope.aborted) composerEditorRef.current?.focus();
+    };
+    Dialog.alert(
+      "Edit from here?",
+      "Rewind chat to before this message. Your prompt returns to the composer. “Revert files too” also undoes your own edits.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Revert files too", style: "destructive", onPress: () => void rewind(true) },
+        { text: "Revert and keep changes", onPress: () => void rewind(false) },
+      ],
+    );
+  };
+
   const collapseComposer = () => {
     composerEditorRef.current?.blur();
   };
@@ -1455,6 +1517,7 @@ function ThreadDetailBody(
                 onEditPendingMessage={
                   isProviderSubagent || pendingMessageEditBlocked ? null : handleEditPendingMessage
                 }
+                onEditFromHere={isProviderSubagent ? null : handleEditFromHere}
                 contentPresentation={props.contentPresentation}
                 threadTitle={props.selectedThread.title}
                 latestRun={props.activityRun}
