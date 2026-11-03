@@ -846,7 +846,38 @@ describe("MessagesTimeline automation prompts", () => {
       [
         message("First prompt", { runId: firstRunId, inputIntent: "turn_start" }, "user-1"),
         message("First answer", { role: "assistant", runId: firstRunId }, "assistant-1"),
-        message("Latest prompt", { runId: latestRunId, inputIntent: "turn_start" }, "user-2"),
+        message(
+          "Latest prompt [notes.txt](t3-context://v1/file/ctx_notes)",
+          {
+            runId: latestRunId,
+            inputIntent: "turn_start",
+            attachments: [
+              {
+                type: "file",
+                id: "notes",
+                name: "notes.txt",
+                mimeType: "text/plain",
+                sizeBytes: 5,
+              },
+            ],
+            context: {
+              version: 1,
+              records: [
+                {
+                  version: 1,
+                  kind: "file",
+                  contextId: ComposerContextId.make("ctx_notes"),
+                  label: "notes.txt",
+                  attachmentId: "notes",
+                  name: "notes.txt",
+                  mimeType: "text/plain",
+                  sizeBytes: 5,
+                },
+              ],
+            },
+          },
+          "user-2",
+        ),
         message("Latest answer", { role: "assistant", runId: latestRunId }, "assistant-2"),
       ],
       {
@@ -870,9 +901,22 @@ describe("MessagesTimeline automation prompts", () => {
 
     await click(screen.button("Edit"));
     await expect.element(editor).toHaveFocus();
-    await userEvent.keyboard(", edited{Control>}{Enter}{/Control}");
+    await click(screen.button("Remove notes.txt"));
+    await userEvent.upload(
+      document.querySelector<HTMLInputElement>('input[type="file"]')!,
+      new File(["# Plan"], "plan.md", { type: "text/markdown" }),
+    );
+    await expect.element(screen.getByRole("button", { name: "Remove plan.md" })).toBeVisible();
+    await editor.click();
+    await userEvent.keyboard("{End}, edited{Control>}{Enter}{/Control}");
     expect(onEditPrompt).toHaveBeenCalledOnce();
-    expect(onEditPrompt).toHaveBeenCalledWith(1, MessageId.make("user-2"), "Latest prompt, edited");
+    expect(onEditPrompt).toHaveBeenCalledWith(
+      1,
+      MessageId.make("user-2"),
+      // Removing the file also removes its chip from the text.
+      expect.stringMatching(/^Latest prompt\s*, edited$/),
+      { kept: [], added: [expect.objectContaining({ type: "file", name: "plan.md" })] },
+    );
   });
 });
 

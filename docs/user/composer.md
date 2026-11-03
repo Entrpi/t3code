@@ -160,8 +160,10 @@ into a normal draft.
 
 On web and desktop, choose **Edit** beneath your latest prompt to change it in place.
 Press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux, or choose **Send**, to
-rewind the conversation to before that prompt and send your edit with its original
-attachments. Press `Esc` to cancel. Workspace files stay as they are.
+rewind the conversation to before that prompt and send your edit. Remove an attachment
+with its close button, or add files by pasting, dropping, or choosing **Attach files**.
+Press `Esc` to cancel. Workspace files stay as they are. If the edit cannot be sent after
+the rewind, its text and attachments return to the composer.
 
 Choose **Edit from here** beneath an earlier message, or beneath any sent message on
 mobile, to rewind the conversation to before that message. Choose **Revert and keep changes** to

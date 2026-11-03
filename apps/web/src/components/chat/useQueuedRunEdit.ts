@@ -33,18 +33,12 @@ import {
   type ComposerThreadTarget,
 } from "../../composerDraftStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
-import {
-  awaitAttachmentUploads,
-  getUploadedAttachments,
-  releaseDraftAttachments,
-  startAttachmentUpload,
-} from "../../lib/attachmentUploadQueue";
+import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
 import { buildMessageContext } from "../../lib/composerContextRecords";
 import { readFileAsDataUrl } from "../../lib/imageCompression";
 import type { TerminalContextDraft } from "../../lib/terminalContext";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { environmentServerConfigsAtom } from "../../state/server";
 import {
   environmentThreadDetails,
   environmentThreadShells,
@@ -53,7 +47,7 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
-import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
+import { uploadComposerAttachments } from "./composerFileUploads";
 import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queuedMessageEdit";
 import type { EditQueuedRunRequest } from "./QueuedRunsControl";
 
@@ -97,33 +91,14 @@ async function submitQueuedRunEdit(input: {
   const { environmentId, draftTarget, editing, content } = input;
   const editText = content.prompt.trim();
   const newAttachments = [...content.images, ...content.files];
-  const uploadFiles = async (files: ReadonlyArray<ComposerFileAttachment>) => {
-    const validateFiles = () => {
-      const config = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId) ?? null;
-      const reason = fileAttachmentCapabilityBlockReason({
-        files,
-        attachmentUploadsCapabilityKnown: config !== null,
-        supportsAttachmentUploads: config !== null,
-        maxFileAttachmentBytes:
-          config?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null,
-      });
-      if (reason !== null) throw new Error(reason);
-    };
-    validateFiles();
-    for (const file of files) startAttachmentUpload({ environmentId, image: file, draftTarget });
-    await awaitAttachmentUploads(files.map((file) => file.id));
-    validateFiles();
-    const uploaded = getUploadedAttachments({ environmentId, images: files });
-    if (uploaded === null) throw new Error("Retry or remove failed uploads before saving.");
-    return uploaded;
-  };
   try {
     const uploads = await prepareQueuedEditAttachments({
       existingAttachments: editing.existingAttachments,
       images: content.images,
       files: content.files,
       readImage: readFileAsDataUrl,
-      uploadFiles,
+      uploadFiles: (files) =>
+        uploadComposerAttachments({ environmentId, attachments: files, draftTarget }),
     });
     const keptRecords = (editing.context?.records ?? []).filter(
       (record) =>

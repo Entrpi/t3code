@@ -23,6 +23,7 @@ import { type LegendListRef } from "@legendapp/list/react";
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
 import type { PendingApproval } from "../../session-logic";
 import { type ChatFileAttachment } from "../../types";
+import type { InlineEditAttachments } from "./InlinePromptEditor";
 import { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { type AssistantCitationTarget } from "./AssistantCitationSource";
 import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
@@ -61,9 +62,14 @@ export interface TimelineRowSharedState {
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
-  /** Rewinds before the message and sends `text` in its place; resolves to an error or null. */
+  /** Rewinds before the message and sends the edit in its place; resolves to an error or null. */
   onEditPrompt?:
-    | ((targetTurnCount: number, messageId: MessageId, text: string) => Promise<string | null>)
+    | ((
+        targetTurnCount: number,
+        messageId: MessageId,
+        text: string,
+        attachments: InlineEditAttachments,
+      ) => Promise<string | null>)
     | undefined;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;

@@ -6,6 +6,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   ChatAttachmentId,
+  CheckpointId,
+  CheckpointScopeId,
   CommandId,
   EventId,
   GuestMessageId,
@@ -30,7 +32,10 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   OrchestratorCommandPreviouslyRejectedError,
+  OrchestratorCommandRejectedError,
   OrchestratorDispatchError,
+  type OrchestratorV2DispatchResult,
+  type OrchestratorV2Error,
 } from "./Orchestrator.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import { dispatchCommand } from "./ThreadMessageIntake.ts";
@@ -370,6 +375,91 @@ it.effect("a retried response re-claims the preserved pending uploads", () =>
         entry.startsWith("thread-retry-"),
       ),
     ).toHaveLength(2);
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+it.effect("claims a rewind's new uploads and keeps them only when the rewind is new", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const rewind = (
+      name: string,
+      dispatch: (
+        command: OrchestrationV2ServerCommand,
+      ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>,
+    ) =>
+      Effect.gen(function* () {
+        const pendingId = ChatAttachmentId.make(createPendingAttachmentId()!);
+        NodeFS.writeFileSync(
+          NodePath.join(config.attachmentsDir, `${pendingId}.png`),
+          new Uint8Array([1, 2, 3]),
+        );
+        const captured: OrchestrationV2ServerCommand[] = [];
+        yield* dispatchCommand({
+          type: "checkpoint.rollback",
+          commandId: CommandId.make(`rewind-${name}`),
+          threadId: ThreadId.make(`thread-rewind-${name}`),
+          checkpointId: CheckpointId.make("checkpoint-rewind"),
+          scopeId: CheckpointScopeId.make("scope-rewind"),
+          restoreFiles: false,
+          followUp: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make(`message-rewind-${name}`),
+            text: "Edited",
+            attachments: [
+              {
+                type: "image",
+                id: pendingId,
+                name: "new.png",
+                mimeType: "image/png",
+                sizeBytes: 3,
+              },
+            ],
+          },
+        }).pipe(
+          Effect.provide(
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              dispatch: (command) => {
+                captured.push(command);
+                return dispatch(command);
+              },
+            }),
+          ),
+          Effect.result,
+        );
+        const command = captured[0];
+        if (command?.type !== "checkpoint.rollback") throw new Error("Expected a rollback.");
+        return {
+          sent: command.followUp?.attachments ?? [],
+          threadFiles: NodeFS.readdirSync(config.attachmentsDir).filter((entry) =>
+            entry.startsWith(`thread-rewind-${name}-`),
+          ),
+        };
+      });
+
+    const accepted = yield* rewind("accepted", () =>
+      Effect.succeed({ sequence: 1, storedEvents: [] }),
+    );
+    expect(accepted.sent.map((attachment) => `${attachment.id}.png`)).toEqual(accepted.threadFiles);
+    expect(accepted.threadFiles).toHaveLength(1);
+
+    const replayed = yield* rewind("replayed", () =>
+      Effect.succeed({ sequence: 1, storedEvents: [], replayed: true as const }),
+    );
+    expect(replayed.sent).toHaveLength(1);
+    expect(replayed.threadFiles).toEqual([]);
+
+    const rejected = yield* rewind("rejected", (command) =>
+      Effect.fail(
+        new OrchestratorCommandRejectedError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Interrupt the current turn first.",
+        }),
+      ),
+    );
+    expect(rejected.sent).toHaveLength(1);
+    expect(rejected.threadFiles).toEqual([]);
   }).pipe(Effect.provide(layerIntakeTest)),
 );
 

@@ -153,6 +153,32 @@ export async function startFanoutThread(input: {
  * attachments back in the composer draft. Returns the restored prompt, or the
  * error to show; on error the draft is untouched.
  */
+/** Puts a rewound message's files back into a draft; images get fresh preview URLs. */
+export function addRestoredAttachmentsToDraft(
+  draftTarget: ScopedThreadRef | DraftId,
+  restored: ReadonlyArray<{ readonly file: File; readonly type: "image" | "file" }>,
+) {
+  const images: ComposerImageAttachment[] = [];
+  const files: ComposerFileAttachment[] = [];
+  for (const { file, type } of restored) {
+    const attachment = {
+      id: randomUUID(),
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      file,
+    };
+    if (type === "image") {
+      images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
+    } else {
+      files.push({ ...attachment, type: "file" });
+    }
+  }
+  const store = useComposerDraftStore.getState();
+  store.addImages(draftTarget, images, { allowDuplicates: true });
+  store.addFiles(draftTarget, files, { allowDuplicates: true });
+}
+
 export async function rewindToMessage(input: {
   readonly message: ChatMessage;
   readonly environmentId: EnvironmentId;
@@ -227,24 +253,13 @@ export async function rewindToMessage(input: {
           ? `${currentPrompt}\n\n${restoredPrompt}`
           : restoredPrompt;
     store.setPrompt(draftTarget, nextPrompt);
-    const images: ComposerImageAttachment[] = [];
-    const restoredFiles: ComposerFileAttachment[] = [];
-    files.forEach((file, index) => {
-      const attachment = {
-        id: randomUUID(),
-        name: file.name,
-        mimeType: file.type,
-        sizeBytes: file.size,
+    addRestoredAttachmentsToDraft(
+      draftTarget,
+      files.map((file, index) => ({
         file,
-      };
-      if (message.attachments?.[index]?.type === "image") {
-        images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
-      } else {
-        restoredFiles.push({ ...attachment, type: "file" });
-      }
-    });
-    store.addImages(draftTarget, images, { allowDuplicates: true });
-    store.addFiles(draftTarget, restoredFiles, { allowDuplicates: true });
+        type: message.attachments?.[index]?.type === "image" ? "image" : "file",
+      })),
+    );
     return { error: null, prompt: nextPrompt };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Failed to revert thread state." };
