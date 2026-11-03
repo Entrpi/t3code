@@ -78,25 +78,11 @@ export class CheckpointRestoreError extends Schema.TaggedError<CheckpointRestore
   }
 }
 
-export class CheckpointDeleteStaleRefsError extends Schema.TaggedError<CheckpointDeleteStaleRefsError>()(
-  "CheckpointDeleteStaleRefsError",
-  {
-    scopeId: CheckpointScopeId,
-    checkpointIds: Schema.Array(CheckpointId),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to delete stale checkpoint refs for scope ${this.scopeId}.`;
-  }
-}
-
 export const CheckpointServiceV2Error = Schema.Union([
   CheckpointRootScopePrepareError,
   CheckpointBaselineCaptureError,
   CheckpointCaptureError,
   CheckpointRestoreError,
-  CheckpointDeleteStaleRefsError,
 ]);
 export type CheckpointServiceV2Error = typeof CheckpointServiceV2Error.Type;
 
@@ -133,10 +119,6 @@ export interface CheckpointServiceV2Shape {
   readonly restore: (input: {
     readonly scope: OrchestrationV2CheckpointScope;
     readonly checkpoint: OrchestrationV2Checkpoint;
-  }) => Effect.Effect<void, CheckpointServiceV2Error>;
-  readonly deleteStaleRefs: (input: {
-    readonly scope: OrchestrationV2CheckpointScope;
-    readonly checkpoints: ReadonlyArray<OrchestrationV2Checkpoint>;
   }) => Effect.Effect<void, CheckpointServiceV2Error>;
 }
 
@@ -538,24 +520,6 @@ export const layer: Layer.Layer<
         ),
       );
 
-    const deleteStaleRefs: CheckpointServiceV2Shape["deleteStaleRefs"] = (input) =>
-      withWorkspaceLock(
-        input.scope.cwd,
-        checkpointStore.deleteCheckpointRefs({
-          cwd: input.scope.cwd,
-          checkpointRefs: input.checkpoints.map((checkpoint) => checkpoint.ref),
-        }),
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new CheckpointDeleteStaleRefsError({
-              scopeId: input.scope.id,
-              checkpointIds: input.checkpoints.map((checkpoint) => checkpoint.id),
-              cause,
-            }),
-        ),
-      );
-
     return CheckpointServiceV2.of({
       prepareRootRunScope: (input) =>
         makeRootRunScope({ ...input, idAllocator }).pipe(
@@ -572,7 +536,6 @@ export const layer: Layer.Layer<
       materializeBaselineCheckpoint,
       capture,
       restore,
-      deleteStaleRefs,
     } satisfies CheckpointServiceV2Shape);
   }),
 );

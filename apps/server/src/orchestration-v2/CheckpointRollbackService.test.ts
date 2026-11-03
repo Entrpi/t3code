@@ -559,7 +559,6 @@ const seedRollbackHistory = Effect.gen(function* () {
 
   const rollbackCounts: number[] = [];
   const restored: CheckpointId[] = [];
-  const deletedRefs: CheckpointId[] = [];
   const committed: OrchestrationV2DomainEvent[] = [];
   const serviceLayer = layerCheckpointRollbackService.pipe(
     Layer.provide(
@@ -570,10 +569,6 @@ const seedRollbackHistory = Effect.gen(function* () {
           restore: ({ checkpoint }) =>
             Effect.sync(() => {
               restored.push(checkpoint.id);
-            }),
-          deleteStaleRefs: ({ checkpoints }) =>
-            Effect.sync(() => {
-              deletedRefs.push(...checkpoints.map((checkpoint) => checkpoint.id));
             }),
         }),
         Layer.mock(EventSink.EventSinkV2)({
@@ -627,7 +622,6 @@ const seedRollbackHistory = Effect.gen(function* () {
     rollback,
     rollbackCounts,
     restored,
-    deletedRefs,
     committed,
   };
 });
@@ -663,7 +657,6 @@ it.layer(ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMe
 
         assert.deepEqual(history.rollbackCounts, [4]);
         assert.deepEqual(history.restored, [checkpointId(2)]);
-        assert.sameMembers(history.deletedRefs, [3, 4, 5, 6].map(checkpointId));
         const runs = yield* sql<{ ordinal: number; status: string }>`
           SELECT ordinal, status FROM orchestration_v2_projection_runs
           WHERE thread_id = ${threadId} ORDER BY ordinal`;
@@ -707,7 +700,6 @@ it.layer(ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMe
           yield* history.rollback(0);
 
           assert.deepEqual(history.rollbackCounts, [1, 3, 3]);
-          assert.sameMembers(history.deletedRefs, [1, 2, 3, 4, 5, 6].map(history.checkpointId));
           assert.sameMembers(
             history.committed
               .filter((event) => event.type === "run.updated")
