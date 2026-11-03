@@ -47,7 +47,10 @@ import {
   latestProviderVersionCacheKeys,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import type { ProviderSnapshotSource } from "./builtInProviderCatalog.ts";
-import { canRewindConversation } from "../orchestration-v2/CommandPolicy.ts";
+import {
+  canRewindConversation,
+  rewindStartsNewSession,
+} from "../orchestration-v2/CommandPolicy.ts";
 
 export type ProviderMaintenanceActionKind = "update";
 
@@ -345,6 +348,7 @@ const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource
       Effect.map((capabilities): ServerProvider => ({
         ...snapshot,
         supportsConversationRollback: canRewindConversation(capabilities),
+        conversationRollbackStartsNewSession: rewindStartsNewSession(capabilities),
       })),
       Effect.orElseSucceed(() => snapshot),
     );

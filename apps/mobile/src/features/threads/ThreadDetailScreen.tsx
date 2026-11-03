@@ -1371,6 +1371,11 @@ function ThreadDetailBody(
     threadEnvironment.revertCheckpoint,
     "edit from here",
   );
+  const conversationProvider = props.serverConfig?.providers.find(
+    (candidate) =>
+      candidate.instanceId ===
+      (props.selectedThread.runtime?.providerInstanceId ?? selectedInstanceId),
+  );
   const handleEditFromHere = (message: ThreadFeedMessage, turnCount: number) => {
     const draftKey = props.composerDraftKey;
     const rewind = async (restoreFiles: boolean) => {
@@ -1394,7 +1399,10 @@ function ThreadDetailBody(
     };
     Dialog.alert(
       "Edit from here?",
-      "Rewind chat to before this message. Your prompt returns to the composer. “Revert files too” also undoes your own edits.",
+      "Rewind chat to before this message. Your prompt returns to the composer. “Revert files too” also undoes your own edits." +
+        (conversationProvider?.conversationRollbackStartsNewSession === true
+          ? " The agent continues in a new session given the conversation you kept. Earlier tool output may be shortened, and its next reply re-reads that conversation."
+          : ""),
       [
         { text: "Cancel", style: "cancel" },
         { text: "Revert files too", style: "destructive", onPress: () => void rewind(true) },
@@ -1517,7 +1525,11 @@ function ThreadDetailBody(
                 onEditPendingMessage={
                   isProviderSubagent || pendingMessageEditBlocked ? null : handleEditPendingMessage
                 }
-                onEditFromHere={isProviderSubagent ? null : handleEditFromHere}
+                onEditFromHere={
+                  isProviderSubagent || conversationProvider?.supportsConversationRollback === false
+                    ? null
+                    : handleEditFromHere
+                }
                 contentPresentation={props.contentPresentation}
                 threadTitle={props.selectedThread.title}
                 latestRun={props.activityRun}

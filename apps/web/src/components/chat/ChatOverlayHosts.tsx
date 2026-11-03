@@ -184,6 +184,9 @@ interface PendingRevert {
   readonly messageId: MessageId;
 }
 
+const REWIND_NEW_SESSION_NOTE =
+  "The agent continues in a new session given the conversation you kept. Earlier tool output may be shortened, and its next reply re-reads that conversation.";
+
 const revertConfirmAtom = makeThreadOverlayAtom<PendingRevert>("revert-confirm");
 
 export function openRevertConfirm(threadKey: string, pending: PendingRevert): void {
@@ -192,6 +195,7 @@ export function openRevertConfirm(threadKey: string, pending: PendingRevert): vo
 
 export function RevertConfirmHost(props: {
   readonly threadKey: string;
+  readonly startsNewSession: boolean;
   readonly onConfirm: (turnCount: number, messageId: MessageId, restoreFiles: boolean) => void;
 }) {
   const pending = useThreadOverlay(revertConfirmAtom, props.threadKey);
@@ -213,6 +217,7 @@ export function RevertConfirmHost(props: {
           <AlertDialogDescription>
             Rewind chat to before this message. Your prompt and attachments return to the composer.
             “Revert files too” also undoes your own edits.
+            {props.startsNewSession ? ` ${REWIND_NEW_SESSION_NOTE}` : null}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

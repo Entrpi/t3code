@@ -1899,8 +1899,10 @@ it.layer(
             textGeneration: {} as ProviderInstance["textGeneration"],
           };
         };
-        // ACP and Cursor rewind into a fresh session; a provider without rollback cannot rewind.
+        // Codex truncates natively, ACP and Cursor rewind into a fresh session, and a provider
+        // without rollback cannot rewind.
         const instances = [
+          instanceFor("codex", CodexProviderCapabilitiesV2),
           instanceFor("acp", AcpProviderCapabilitiesV2),
           instanceFor("cursor", CursorProviderCapabilitiesV2),
           instanceFor("norollback", {
@@ -1937,9 +1939,10 @@ it.layer(
         ).pipe(Effect.provide(runtimeServices));
         assert.deepStrictEqual(
           providers.map(
-            (provider) => `${provider.instanceId}: ${provider.supportsConversationRollback}`,
+            (provider) =>
+              `${provider.instanceId}: ${provider.supportsConversationRollback} ${provider.conversationRollbackStartsNewSession}`,
           ),
-          ["cursor: true", "acp: true", "norollback: false"],
+          ["codex: true false", "cursor: true true", "acp: true true", "norollback: false false"],
         );
       }),
     );
@@ -2409,6 +2412,7 @@ it.layer(
               ...refreshedProvider,
               models: [...initialProvider.models],
               supportsConversationRollback: true,
+              conversationRollbackStartsNewSession: false,
             }),
           );
         }).pipe(Effect.provide(runtimeServices));
@@ -2788,6 +2792,7 @@ it.layer(
           const expected = withBundledCompatibility({
             ...cachedProvider,
             supportsConversationRollback: true,
+            conversationRollbackStartsNewSession: false,
           });
           assert.deepStrictEqual(yield* registry.getProviders, [expected]);
           assert.deepStrictEqual(yield* registry.refresh(codexDriver), [expected]);

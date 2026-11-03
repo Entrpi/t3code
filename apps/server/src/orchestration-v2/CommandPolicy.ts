@@ -318,6 +318,10 @@ export const canRewindConversation = (capabilities: OrchestrationV2ProviderCapab
   (capabilities.checkpointing.providerCanRollbackConversation ||
     capabilities.context.supportsFullThreadHandoff);
 
+export const rewindStartsNewSession = (capabilities: OrchestrationV2ProviderCapabilities) =>
+  canRewindConversation(capabilities) &&
+  !capabilities.checkpointing.providerCanRollbackConversation;
+
 const ensureRollback: CommandPolicyV2Shape["ensureRollback"] = (input) => {
   if (!canRewindConversation(input.capabilities)) {
     return Effect.fail(

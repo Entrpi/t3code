@@ -178,7 +178,9 @@ This removes the selected message and later conversation from the active thread
 and provider history. It does not undo external actions or separate provider
 memory. Every provider except Muse supports it. Providers that cannot shorten their
 own history, such as Grok, Kiro, Antigravity and Cursor, continue in a fresh session
-that is given the conversation you kept.
+that is given the conversation you kept. Earlier tool output may be shortened there,
+and the agent's next reply re-reads that conversation, so it can use more tokens or
+quota than usual.
 
 ## Prompt stash
 
