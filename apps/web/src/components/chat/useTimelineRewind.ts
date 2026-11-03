@@ -34,16 +34,12 @@ import { environmentThreadDetails, threadEnvironment } from "../../state/threads
 import { waitForThreadShell } from "../../state/entities";
 import { openRevertConfirm } from "./ChatOverlayHosts";
 import { assetEnvironment } from "../../state/assets";
-import { readEnvironmentScope, readPreparedConnection } from "../../state/session";
+import { readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
-import { addRestoredAttachmentsToDraft, rewindToMessage } from "./chatViewSend";
-import {
-  makeThreadErrorSetter,
-  prepareRevertedMessageAttachments,
-  waitForRollbackFollowUp,
-} from "../ChatView.logic";
+import { rewindToMessage } from "./chatViewSend";
+import { makeThreadErrorSetter, waitForRollbackFollowUp } from "../ChatView.logic";
 import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
 import { uploadComposerAttachments } from "./composerFileUploads";
 import type { InlineEditAttachments } from "./InlinePromptEditor";
@@ -118,39 +114,6 @@ export function useTimelineRewind(input: TimelineRewindInput) {
     requestAnimationFrame(() => {
       if (currentRouteThreadKeyRef.current === routeThreadKey) composerRef.current?.focusAtEnd();
     });
-  };
-
-  const restoreEditAttachments = async (attachments: InlineEditAttachments) => {
-    const connection = readPreparedConnection(environmentId);
-    const kept = await Promise.all(
-      attachments.kept.map((attachment) =>
-        connection === null
-          ? null
-          : prepareRevertedMessageAttachments({
-              message: { attachments: [attachment] },
-              environmentId,
-              httpBaseUrl: connection.httpBaseUrl,
-              createAssetUrl: createAttachmentAssetUrl,
-            }).then(
-              ([file]) => (file === undefined ? null : { file, type: attachment.type }),
-              () => null,
-            ),
-      ),
-    );
-    addRestoredAttachmentsToDraft(composerDraftTarget, [
-      ...kept.flatMap((restored) =>
-        restored === null
-          ? []
-          : [{ file: restored.file, type: restored.type === "image" ? "image" : "file" } as const],
-      ),
-      ...attachments.added.flatMap((attachment) =>
-        attachment.file === null ? [] : [{ file: attachment.file, type: attachment.type }],
-      ),
-    ]);
-    const missing = attachments.kept.filter((_, index) => kept[index] === null);
-    return missing.length === 0
-      ? null
-      : `Could not restore ${missing.map((attachment) => attachment.name).join(", ")}.`;
   };
 
   const onRevertToTurnCount = async (
@@ -253,6 +216,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
           ];
     setRewinding(true);
     setThreadError(threadId, null);
+    let accepted = false;
     const failure = await prepareAttachments()
       .then((followUpAttachments) =>
         waitForRollbackFollowUp(routeThreadRef, commandId, followUpMessageId, async () => {
@@ -279,6 +243,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
             },
           });
           if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          accepted = true;
         }),
       )
       .then(
@@ -287,28 +252,21 @@ export function useTimelineRewind(input: TimelineRewindInput) {
           error instanceof Error ? error.message : "Could not edit this message.",
       );
     setRewinding(false);
-    const thread = Option.getOrNull(
-      appAtomRegistry.get(environmentThreadDetails.stateAtom(routeThreadRef)).data,
-    );
-    // A rewind that landed took the message, and its editor, with it.
-    const rewound =
-      thread?.runs.find((candidate) => candidate.id === message.runId)?.status === "rolled_back";
-    // The editor keeps a failed attempt's uploads for its retry; otherwise this edit is done with them.
-    if (failure === null || rewound) releaseDraftAttachments(attachments.added);
+    // Unsent, the editor keeps the edit and its uploads for a retry.
+    if (failure !== null && !accepted) return failure;
+    // A rewind that failed for good holds its edit at the front of the queue.
+    const parked =
+      failure !== null &&
+      Option.getOrNull(
+        appAtomRegistry.get(environmentThreadDetails.stateAtom(routeThreadRef)).data,
+      )?.messages.some((candidate) => candidate.id === followUpMessageId) === true;
+    if (failure === null || parked) releaseDraftAttachments(attachments.added);
     if (failure === null) return null;
-    // Only the server's recorded failure means the edit will not send; a timeout may still land.
-    if (rewound && thread?.thread.rollbackFailure?.requestId === commandId) {
-      const draft = useComposerDraftStore.getState();
-      const current = draft.getComposerDraft(composerDraftTarget)?.prompt ?? "";
-      const nextPrompt = current.length > 0 ? `${current}\n\n${edited.text}` : edited.text;
-      draft.setPrompt(composerDraftTarget, nextPrompt);
-      showComposerPrompt(nextPrompt);
-      const restoreError = await restoreEditAttachments(attachments);
-      setThreadError(threadId, restoreError === null ? failure : `${failure} ${restoreError}`);
-    } else if (rewound) {
-      setThreadError(threadId, failure);
-    }
-    return failure;
+    setThreadError(
+      threadId,
+      parked ? `${failure} Your edit is held at the front of the queue.` : failure,
+    );
+    return parked ? null : failure;
   };
   const onEditPromptStable = useStableCallback(onEditPrompt);
 

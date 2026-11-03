@@ -3493,6 +3493,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     requestId: CommandId,
     message: TrimmedNonEmptyString,
+    /** The rewind's edited message, held at the front of the queue so no client has to keep it. */
+    followUp: Schema.optional(OrchestrationV2RollbackFollowUp),
   }),
   /** Delivering the answer to request `requestId` failed on its last attempt. */
   Schema.Struct({

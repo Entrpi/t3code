@@ -984,9 +984,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         requestId: rollbackCommandId,
         message: ROLLBACK_FAILED_MESSAGE,
       });
-      assert.notInclude(
-        failed.messages.map((message) => message.text),
-        "Edited prompt",
+      const parked = failed.messages.find((message) => message.text === "Edited prompt");
+      const parkedRun = failed.runs.find((run) => run.userMessageId === parked?.id);
+      assert.deepEqual(
+        [parkedRun?.status, parkedRun?.queueHeld, parkedRun?.queuePosition],
+        ["queued", true, 1],
       );
 
       yield* rollback(CommandId.make("runtime-rollback-failure-retry"));
