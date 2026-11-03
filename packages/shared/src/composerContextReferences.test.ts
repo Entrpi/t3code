@@ -9,6 +9,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
+  dropRemovedAttachmentContext,
   formatComposerContextHref,
   isImageReferencesOnly,
   parseComposerContextHref,
@@ -89,6 +90,56 @@ describe("labels and reference links", () => {
     expect(isImageReferencesOnly(file)).toBe(false);
     expect(isImageReferencesOnly(`${image} ${file}`)).toBe(false);
     expect(isImageReferencesOnly("  ")).toBe(false);
+  });
+});
+
+describe("dropRemovedAttachmentContext", () => {
+  it("removes a removed attachment's records and every reference to them", () => {
+    const record = (contextId: string, attachmentId: string, name: string) => ({
+      version: 1 as const,
+      kind: "image" as const,
+      contextId: ctx(contextId),
+      label: name,
+      attachmentId,
+      name,
+      mimeType: "image/png",
+      sizeBytes: 3,
+    });
+    const terminal = {
+      version: 1 as const,
+      kind: "terminal" as const,
+      contextId: ctx("ctx_t"),
+      label: "T1",
+      terminalId: "t1",
+      terminalLabel: "T1",
+      lineStart: 1,
+      lineEnd: 1,
+      text: "ls",
+    };
+    const context = {
+      version: 1 as const,
+      records: [
+        record("ctx_old", "old", "old.png"),
+        record("ctx_kept", "kept", "kept.png"),
+        terminal,
+      ],
+    } as unknown as Parameters<typeof dropRemovedAttachmentContext>[1];
+    const text =
+      "Compare ![old.png](t3-context://v1/image/ctx_old) with ![kept.png](t3-context://v1/image/ctx_kept) after [T1](t3-context://v1/terminal/ctx_t), not [old](t3-context://v1/image/ctx_old).";
+
+    const dropped = dropRemovedAttachmentContext(text, context, new Set(["kept"]));
+    expect(dropped.text).toBe(
+      "Compare  with ![kept.png](t3-context://v1/image/ctx_kept) after [T1](t3-context://v1/terminal/ctx_t), not .",
+    );
+    expect(dropped.context?.records.map((entry) => entry.contextId)).toEqual(["ctx_kept", "ctx_t"]);
+    expect(dropRemovedAttachmentContext(text, context, new Set(["old", "kept"]))).toEqual({
+      text,
+      context,
+    });
+    expect(dropRemovedAttachmentContext(text, undefined, new Set())).toEqual({
+      text,
+      context: undefined,
+    });
   });
 });
 

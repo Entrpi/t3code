@@ -12042,7 +12042,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ["providerThreads", "checkpoints", "checkpointScopes", "runs", "providerTurns", "attempts"],
         { turnItemTypes: [], messageRoles: ["user"] },
       );
-      // The follow-up is dispatched by the effect worker, past the intake that claims uploads.
+      // The intake claims a follow-up's uploads; the effect worker sends it later, past that intake.
       if (command.followUp?.attachments.some(attachmentIsPendingUpload)) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -13682,7 +13682,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ),
             );
           if (
-            command.type === "queued-run.edit" &&
+            (command.type === "queued-run.edit" || command.type === "checkpoint.rollback") &&
             receipt.status === "rejected" &&
             cause._tag === "OrchestratorDispatchError"
           ) {

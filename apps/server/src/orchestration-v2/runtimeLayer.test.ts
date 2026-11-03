@@ -1142,7 +1142,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
           );
         } else {
           const error = yield* rollback.pipe(Effect.flip);
-          assert.instanceOf(error, Orchestrator.OrchestratorDispatchError);
+          // Rejected, not merely failed, so the intake releases the follow-up's uploads.
+          assert.instanceOf(error, Orchestrator.OrchestratorCommandRejectedError);
           assert.equal(
             error.cause,
             `Checkpoint ${checkpointId} is ${status} and cannot be restored.`,

@@ -499,6 +499,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   // Images or videos sent without words show as media, not as a bubble around them.
   const mediaOnly =
     !folded &&
+    !editingInline &&
     userMessage.attribution !== "guest" &&
     resolvedContext.text.trim() === "" &&
     userAudio.length === 0 &&
@@ -508,6 +509,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   // Media sent with words sits above the bubble as its own shape, like a chat app.
   const mediaAboveText =
     !folded &&
+    !editingInline &&
     userMessage.attribution !== "guest" &&
     !mediaOnly &&
     regularImages.length + userVideos.length > 0;
@@ -913,130 +915,144 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               folded && !ctx.findActive && "max-h-96 overflow-auto",
             )}
           >
-            {!mediaAboveText && mediaBlock}
-            {userAudio.length > 0 ? (
-              <div className={cn("flex max-w-full flex-col gap-1", !audioOnly && "mb-2")}>
-                {userAudio.map((file) => (
-                  <InlineAudioPreview
-                    key={file.id}
-                    name={file.name}
-                    variant={audioOnly ? "bubble" : "chip"}
-                    environmentId={ctx.activeThreadEnvironmentId}
-                    resource={{
-                      _tag: "attachment",
-                      attachmentId: file.id,
-                      fileName: file.name,
-                      mimeType: file.mimeType,
-                      disposition: "inline",
-                    }}
-                    onOpen={() => ctx.onFileOpen(file)}
-                  />
-                ))}
-              </div>
-            ) : null}
-            {fileCardsOnly ? (
-              <div className="flex flex-col items-end gap-1" onCopyCapture={onBodyCopyCapture}>
-                {otherUserFiles.map((file) => (
-                  <UserFileCard
-                    key={file.id}
-                    file={file}
-                    copyMarkdown={
-                      attachmentReferences.find((reference) => reference.attachmentId === file.id)
-                        ?.source
-                    }
-                  />
-                ))}
-              </div>
-            ) : null}
-            {!fileCardsOnly && (unchippedFiles.length > 0 || unknownAttachments.length > 0) ? (
-              <div className="mb-2 flex flex-col gap-1">
-                {unchippedFiles.map((file) => {
-                  const pastedText = file.source?._tag === "pasted-text";
-                  const label = userMessageFileLabel(file);
-                  const fileIdentity = (
-                    <>
-                      <PierreEntryIcon
-                        pathValue={file.name}
-                        kind="file"
-                        theme={ctx.resolvedTheme}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate">{label}</span>
-                        {file.downloadable === false || pastedText ? (
-                          <span className="block text-xs text-muted-foreground tabular-nums">
-                            {file.downloadable === false ? "Sending…" : formatBytes(file.sizeBytes)}
-                          </span>
-                        ) : null}
-                      </span>
-                    </>
-                  );
-                  if (file.downloadable !== false) {
-                    return (
-                      <div key={file.id} className="flex min-w-0 items-center gap-1">
-                        <button
-                          type="button"
-                          aria-label={`Preview ${label}`}
-                          onClick={() => ctx.onFileOpen(file)}
-                          className="focus-visible:ring-ring/70 flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left text-sm hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none"
-                        >
-                          {fileIdentity}
-                          <EyeIcon className="size-4 shrink-0" />
-                        </button>
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <Button
-                                size="icon-xs"
-                                variant="ghost-muted"
-                                aria-label={`Download ${label}`}
-                                onClick={() => ctx.onFileDownload(file)}
-                              />
-                            }
-                          >
-                            <DownloadIcon />
-                          </TooltipTrigger>
-                          <TooltipPopup side="top">Download {label}</TooltipPopup>
-                        </Tooltip>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div key={file.id} className="flex min-w-0 items-center gap-2 py-1 text-sm">
-                      {fileIdentity}
-                    </div>
-                  );
-                })}
-                {unknownAttachments.map((attachment) => (
-                  <div key={attachment.id} className="flex min-w-0 items-center gap-2 py-1 text-sm">
-                    <PierreEntryIcon
-                      pathValue={attachment.name}
-                      kind="file"
-                      theme={ctx.resolvedTheme}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
             {editingInline ? (
               <InlinePromptEditor
                 initialText={stripAttachmentOnlyBootstrapPrompt(row.message.text)}
-                allowEmpty={(row.message.attachments?.length ?? 0) > 0}
+                attachments={row.message.attachments ?? []}
+                context={row.message.context}
+                attachmentPreviewUrl={(attachmentId) => previewUrlsById.get(attachmentId) ?? null}
                 skills={ctx.skills}
                 onCancel={() => setEditing(false)}
-                onSave={(text) => onEditPrompt!(inlineEditTurnCount, row.message.id, text)}
+                onSave={(text, attachments) =>
+                  onEditPrompt!(inlineEditTurnCount, row.message.id, text, attachments)
+                }
               />
-            ) : fileCardsOnly || audioOnly ? null : (
-              <div onCopyCapture={onBodyCopyCapture}>
-                <CollapsibleUserMessageBody
-                  text={resolvedContext.text}
-                  renderContextReference={renderContextReference}
-                  skills={ctx.skills}
-                  markdownCwd={ctx.markdownCwd}
-                  collapsible={!folded}
-                />
-              </div>
+            ) : (
+              <>
+                {!mediaAboveText && mediaBlock}
+                {userAudio.length > 0 ? (
+                  <div className={cn("flex max-w-full flex-col gap-1", !audioOnly && "mb-2")}>
+                    {userAudio.map((file) => (
+                      <InlineAudioPreview
+                        key={file.id}
+                        name={file.name}
+                        variant={audioOnly ? "bubble" : "chip"}
+                        environmentId={ctx.activeThreadEnvironmentId}
+                        resource={{
+                          _tag: "attachment",
+                          attachmentId: file.id,
+                          fileName: file.name,
+                          mimeType: file.mimeType,
+                          disposition: "inline",
+                        }}
+                        onOpen={() => ctx.onFileOpen(file)}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {fileCardsOnly ? (
+                  <div className="flex flex-col items-end gap-1" onCopyCapture={onBodyCopyCapture}>
+                    {otherUserFiles.map((file) => (
+                      <UserFileCard
+                        key={file.id}
+                        file={file}
+                        copyMarkdown={
+                          attachmentReferences.find(
+                            (reference) => reference.attachmentId === file.id,
+                          )?.source
+                        }
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {!fileCardsOnly && (unchippedFiles.length > 0 || unknownAttachments.length > 0) ? (
+                  <div className="mb-2 flex flex-col gap-1">
+                    {unchippedFiles.map((file) => {
+                      const pastedText = file.source?._tag === "pasted-text";
+                      const label = userMessageFileLabel(file);
+                      const fileIdentity = (
+                        <>
+                          <PierreEntryIcon
+                            pathValue={file.name}
+                            kind="file"
+                            theme={ctx.resolvedTheme}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">{label}</span>
+                            {file.downloadable === false || pastedText ? (
+                              <span className="block text-xs text-muted-foreground tabular-nums">
+                                {file.downloadable === false
+                                  ? "Sending…"
+                                  : formatBytes(file.sizeBytes)}
+                              </span>
+                            ) : null}
+                          </span>
+                        </>
+                      );
+                      if (file.downloadable !== false) {
+                        return (
+                          <div key={file.id} className="flex min-w-0 items-center gap-1">
+                            <button
+                              type="button"
+                              aria-label={`Preview ${label}`}
+                              onClick={() => ctx.onFileOpen(file)}
+                              className="focus-visible:ring-ring/70 flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left text-sm hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none"
+                            >
+                              {fileIdentity}
+                              <EyeIcon className="size-4 shrink-0" />
+                            </button>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    size="icon-xs"
+                                    variant="ghost-muted"
+                                    aria-label={`Download ${label}`}
+                                    onClick={() => ctx.onFileDownload(file)}
+                                  />
+                                }
+                              >
+                                <DownloadIcon />
+                              </TooltipTrigger>
+                              <TooltipPopup side="top">Download {label}</TooltipPopup>
+                            </Tooltip>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={file.id} className="flex min-w-0 items-center gap-2 py-1 text-sm">
+                          {fileIdentity}
+                        </div>
+                      );
+                    })}
+                    {unknownAttachments.map((attachment) => (
+                      <div
+                        key={attachment.id}
+                        className="flex min-w-0 items-center gap-2 py-1 text-sm"
+                      >
+                        <PierreEntryIcon
+                          pathValue={attachment.name}
+                          kind="file"
+                          theme={ctx.resolvedTheme}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {fileCardsOnly || audioOnly ? null : (
+                  <div onCopyCapture={onBodyCopyCapture}>
+                    <CollapsibleUserMessageBody
+                      text={resolvedContext.text}
+                      renderContextReference={renderContextReference}
+                      skills={ctx.skills}
+                      markdownCwd={ctx.markdownCwd}
+                      collapsible={!folded}
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
         ) : null}

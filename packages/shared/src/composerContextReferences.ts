@@ -427,6 +427,35 @@ export function threadContextsOutsideEnvironment(input: {
   );
 }
 
+/** Drops the records of attachments no longer sent, and the text's references to them. */
+export function dropRemovedAttachmentContext(
+  text: string,
+  context: import("@t3tools/contracts").OrchestrationMessageContext | undefined,
+  keptAttachmentIds: ReadonlySet<string>,
+): {
+  readonly text: string;
+  readonly context: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
+} {
+  if (context === undefined) return { text, context };
+  const dropped = new Set(
+    context.records.flatMap((record) =>
+      "attachmentId" in record && !keptAttachmentIds.has(record.attachmentId)
+        ? [record.contextId]
+        : [],
+    ),
+  );
+  if (dropped.size === 0) return { text, context };
+  return {
+    text: replaceComposerContextReferences(text, (occurrence) =>
+      dropped.has(occurrence.contextId) ? "" : occurrence.source,
+    ),
+    context: {
+      ...context,
+      records: context.records.filter((record) => !dropped.has(record.contextId)),
+    },
+  };
+}
+
 export function remapComposerContextAttachments(
   context: import("@t3tools/contracts").OrchestrationMessageContext | undefined,
   before: ReadonlyArray<{ readonly id?: string | undefined }>,

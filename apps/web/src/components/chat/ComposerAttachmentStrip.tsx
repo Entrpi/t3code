@@ -634,7 +634,7 @@ export function ComposerQueuedAttachmentRow({
   onRemove,
 }: {
   readonly attachments: ReadonlyArray<{
-    readonly attachment: ChatAttachment;
+    readonly attachment: Pick<ChatAttachment, "type" | "name"> & { readonly id: string };
     readonly url: string | null;
   }>;
   readonly onRemove: (attachmentId: string) => void;

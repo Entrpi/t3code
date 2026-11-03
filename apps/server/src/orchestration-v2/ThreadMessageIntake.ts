@@ -152,6 +152,43 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
         ),
       );
   }
+  if (command.type === "checkpoint.rollback" && command.followUp !== undefined) {
+    const followUp = command.followUp;
+    const claimed = yield* AttachmentClaims.claimPendingAttachments({
+      threadId: command.threadId,
+      attachments: followUp.attachments,
+    });
+    return yield* threads
+      .dispatch({
+        ...command,
+        followUp: {
+          ...followUp,
+          attachments: claimed.attachments,
+          ...(followUp.context
+            ? {
+                context: remapComposerContextAttachments(
+                  followUp.context,
+                  followUp.attachments,
+                  claimed.attachments,
+                ),
+              }
+            : {}),
+        },
+      })
+      .pipe(
+        // The follow-up is sent later from the accepted rollback's effect, which holds these copies.
+        Effect.tap((result) =>
+          result.replayed
+            ? AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths)
+            : Effect.void,
+        ),
+        Effect.tapError((error) =>
+          dispatchWasNotAccepted(error)
+            ? AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths)
+            : Effect.void,
+        ),
+      );
+  }
   if (
     command.type !== "message.dispatch" &&
     (command.type !== "queued-run.edit" || command.attachments === undefined)
