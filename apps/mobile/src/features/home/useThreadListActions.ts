@@ -728,7 +728,7 @@ export function useArchivedThreadListActions(
   onCompleted: (thread: EnvironmentThreadShell) => void,
 ): {
   readonly unarchiveThread: (thread: EnvironmentThreadShell) => void;
-  readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly deleteThread: (thread: EnvironmentThreadShell) => void;
 } {
   const handleCompleted = (_action: ThreadListAction, thread: EnvironmentThreadShell) => {
     onCompleted(thread);
@@ -737,8 +737,11 @@ export function useArchivedThreadListActions(
   const unarchiveThread = (thread: EnvironmentThreadShell) => {
     void executeAction("unarchive", thread);
   };
-  const confirmDeleteThread = (thread: EnvironmentThreadShell) =>
-    confirmThreadDeletion(executeAction, thread);
+  // Archived rows confirm in place, so this deletes without a dialog.
+  const deleteThread = (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, actionFailureTitle("delete"))) return;
+    void executeAction("delete", thread);
+  };
 
-  return { unarchiveThread, confirmDeleteThread };
+  return { unarchiveThread, deleteThread };
 }

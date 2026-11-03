@@ -19,10 +19,11 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { ArchivedThreadDeleteButton } from "./ArchivedThreadDeleteButton";
 
 export function ArchivedThreadsPanel() {
   const { scope, groups: projectGroups, environments } = useSettingsScope();
-  const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
+  const { unarchiveThread, deleteThread, confirmAndDeleteThread } = useThreadActions();
   const {
     snapshots: archivedSnapshots,
     error: archiveError,
@@ -245,14 +246,42 @@ export function ArchivedThreadsPanel() {
                   </span>
                 }
                 control={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={() => {
-                      void (async () => {
-                        const result = await unarchiveThread(
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => {
+                        void (async () => {
+                          const result = await unarchiveThread(
+                            scopeThreadRef(thread.environmentId, thread.id),
+                          );
+                          if (result._tag === "Success") {
+                            refreshArchivedThreads();
+                            return;
+                          }
+                          if (!isAtomCommandInterrupted(result)) {
+                            const error = squashAtomCommandFailure(result);
+                            toastManager.add(
+                              stackedThreadToast({
+                                type: "error",
+                                title: "Failed to unarchive thread",
+                                description:
+                                  error instanceof Error ? error.message : "An error occurred.",
+                              }),
+                            );
+                          }
+                        })();
+                      }}
+                    >
+                      <ArchiveX className="size-3.5" />
+                      <span>Unarchive</span>
+                    </Button>
+                    <ArchivedThreadDeleteButton
+                      title={thread.title}
+                      onDelete={async () => {
+                        const result = await deleteThread(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
                         if (result._tag === "Success") {
@@ -264,18 +293,15 @@ export function ArchivedThreadsPanel() {
                           toastManager.add(
                             stackedThreadToast({
                               type: "error",
-                              title: "Failed to unarchive thread",
+                              title: "Failed to delete thread",
                               description:
                                 error instanceof Error ? error.message : "An error occurred.",
                             }),
                           );
                         }
-                      })();
-                    }}
-                  >
-                    <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
-                  </Button>
+                      }}
+                    />
+                  </div>
                 }
               />
             ))}
