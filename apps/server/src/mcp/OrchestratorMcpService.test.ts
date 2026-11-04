@@ -494,6 +494,11 @@ describe("OrchestratorMcpService", () => {
             Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
           getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
           listAppOwnedChildThreadIds: () => Effect.succeed([]),
+          stopDelegatedChild: (input) =>
+            Ref.update(dispatched, (commands) => [
+              ...commands,
+              { ...input, type: "thread.stop" as const },
+            ]).pipe(Effect.as(true)),
           dispatch: (command) =>
             Ref.update(dispatched, (commands) => [...commands, command]).pipe(
               Effect.as({} as never),
@@ -587,6 +592,11 @@ describe("OrchestratorMcpService", () => {
                 : Effect.succeed(childProjection),
             getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
             listAppOwnedChildThreadIds: () => Effect.succeed([]),
+            stopDelegatedChild: (input) =>
+              Ref.update(dispatched, (commands) => [
+                ...commands,
+                { ...input, type: "thread.stop" as const },
+              ]).pipe(Effect.as(true)),
             delegatedTaskResultPending: () => Effect.succeed(false),
             stopDelegatedTasks: () => Effect.void,
             // The orchestrator's subagent.stop repair is covered in ThreadStop.test.ts.
@@ -687,6 +697,11 @@ describe("OrchestratorMcpService", () => {
             Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
           getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
           listAppOwnedChildThreadIds: () => Effect.succeed([]),
+          stopDelegatedChild: (input) =>
+            Ref.update(dispatched, (commands) => [
+              ...commands,
+              { ...input, type: "thread.stop" as const },
+            ]).pipe(Effect.andThen(Effect.fail(new Error("simulated stop failure") as never))),
           dispatch: (command) =>
             Ref.update(dispatched, (commands) => [...commands, command]).pipe(
               Effect.andThen(Effect.fail(new Error("simulated stop failure") as never)),
@@ -770,6 +785,11 @@ describe("OrchestratorMcpService", () => {
             Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
           getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
           listAppOwnedChildThreadIds: () => Effect.succeed([]),
+          stopDelegatedChild: (input) =>
+            Ref.update(dispatched, (commands) => [
+              ...commands,
+              { ...input, type: "thread.stop" as const },
+            ]).pipe(Effect.as(true)),
           dispatch: (command) =>
             Ref.update(dispatched, (commands) => [...commands, command]).pipe(
               Effect.andThen(
@@ -859,6 +879,11 @@ describe("OrchestratorMcpService", () => {
             Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
           getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
           listAppOwnedChildThreadIds: () => Effect.succeed([]),
+          stopDelegatedChild: (input) =>
+            Ref.update(dispatched, (commands) => [
+              ...commands,
+              { ...input, type: "thread.stop" as const },
+            ]).pipe(Effect.as(true)),
           dispatch: (command) =>
             Ref.update(dispatched, (commands) => [...commands, command]).pipe(
               Effect.andThen(
@@ -1019,6 +1044,11 @@ describe("OrchestratorMcpService", () => {
                     : [],
                 ),
             ),
+          stopDelegatedChild: (input) =>
+            Ref.update(dispatched, (commands) => [
+              ...commands,
+              { ...input, type: "thread.stop" as const },
+            ]).pipe(Effect.as(true)),
           getThreadShell: (threadId) =>
             Effect.succeed(
               threadId === grandchildThreadId && child.raisedDuringStop !== true

@@ -13,6 +13,7 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   RuntimeRequestId,
+  RunId,
   ScheduledTaskId,
   ThreadId,
   TurnItemId,
@@ -284,17 +285,15 @@ it.effect.each([
           : childState === "bound"
             ? "running"
             : "completed";
-      yield* apply({
-        type: "run.updated",
-        threadId: childThreadId,
-        occurredAt: now,
-        payload: { ...runAtStart, status: "running", delegatedTaskId: taskId },
-      });
-      assert.equal(
-        (yield* orchestrator.getThreadProjection(childThreadId)).runs[0]?.delegatedTaskId,
-        taskId,
-      );
-      // A terminal write based on the attempt's start snapshot loses a later steer binding.
+      const bound = childState === "correlated" || childState === "bound";
+      if (bound) {
+        yield* apply({
+          type: "run.updated",
+          threadId: childThreadId,
+          occurredAt: now,
+          payload: { ...runAtStart, status: "running", delegatedTaskId: taskId },
+        });
+      }
       yield* apply({
         type: "run.updated",
         threadId: childThreadId,
@@ -303,14 +302,11 @@ it.effect.each([
           ...runAtStart,
           status: childRunStatus,
           completedAt: childRunStatus === "completed" ? now : null,
-          ...(childState === "correlated" || childState === "bound"
-            ? { delegatedTaskId: taskId }
-            : {}),
         },
       });
       assert.equal(
         (yield* orchestrator.getThreadProjection(childThreadId)).runs[0]?.delegatedTaskId,
-        childState === "correlated" || childState === "bound" ? taskId : undefined,
+        bound ? taskId : undefined,
       );
       if (childState === "provider-active" || childState === "roster") {
         yield* apply({
@@ -1739,6 +1735,130 @@ it.effect.each(["Stop", "Force stop"] as const)(
       assert.isTrue(
         stopped.turnItems.some((item) => item.type === "run_interrupt_result"),
         "the stopped run has no interrupt result",
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each(["active", "terminal", "finished", "failure"] as const)(
+  "parent Stop scopes detached work to unfinished tasks (%s)",
+  (state) =>
+    Effect.gen(function* () {
+      const finished = state === "finished";
+      const terminal = state === "terminal" || finished;
+      const engine = yield* Orchestrator.OrchestratorV2;
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const parentThreadId = ThreadId.make(`thread:detached-stop:${finished}`);
+      yield* createWatchingThread(parentThreadId, 1);
+      yield* send(parentThreadId, "parent", "start_immediately");
+      const childThreadId = yield* delegate(parentThreadId, "child task");
+      const grandchildThreadId = yield* delegate(childThreadId, "nested child task");
+      yield* threads.detachThread({
+        threadId: childThreadId,
+        commandId: CommandId.make(`detach-stop:${finished}`),
+        grouped: true,
+      });
+      const child = yield* engine.getThreadProjection(childThreadId);
+      const parent = yield* engine.getThreadProjection(parentThreadId);
+      const original = parent.subagents[0]!;
+      assert.equal(child.runs[0]?.delegatedTaskId, original.id);
+      const now = yield* DateTime.now;
+      if (state === "failure") {
+        const bound = child.runs[0];
+        if (bound === undefined) return yield* Effect.die("missing bound run");
+        yield* projections.apply({
+          id: EventId.make("event:detached-stop-reorder"),
+          type: "run.updated",
+          threadId: childThreadId,
+          occurredAt: now,
+          payload: { ...bound, ordinal: 2 },
+        });
+        yield* projections.apply({
+          id: EventId.make("event:detached-stop-uninterruptible"),
+          type: "run.updated",
+          threadId: childThreadId,
+          occurredAt: now,
+          payload: {
+            ...bound,
+            id: RunId.make("run:detached-stop-uninterruptible"),
+            ordinal: 1,
+            status: "running",
+            activeAttemptId: null,
+            rootNodeId: null,
+          },
+        });
+      }
+      if (terminal) {
+        yield* projections.apply({
+          id: EventId.make("event:detach-stop-run-finished"),
+          type: "run.updated",
+          threadId: childThreadId,
+          occurredAt: now,
+          payload: { ...child.runs[0]!, status: "completed", completedAt: now },
+        });
+        if (finished)
+          yield* projections.apply({
+            id: EventId.make("event:detach-stop-task-finished"),
+            type: "subagent.updated",
+            threadId: parentThreadId,
+            occurredAt: now,
+            payload: { ...original, status: "completed", result: "Done", completedAt: now },
+          });
+      }
+      yield* send(
+        childThreadId,
+        "independent work",
+        terminal ? "start_immediately" : "queue_after_active",
+      );
+      const independentChildThreadId =
+        state === "terminal"
+          ? yield* delegate(childThreadId, "independent nested task")
+          : undefined;
+      const independentChild =
+        independentChildThreadId === undefined
+          ? undefined
+          : yield* engine.getThreadProjection(independentChildThreadId);
+      const beforeStop = yield* engine.getThreadProjection(childThreadId);
+      const independent = beforeStop.runs.at(-1)!;
+      assert.isUndefined(independent.delegatedTaskId);
+      assert.deepEqual(
+        yield* threads.listAppOwnedChildThreadIds(parentThreadId),
+        finished ? [] : [childThreadId],
+      );
+      yield* threads.stopDelegatedTasks({
+        threadId: parentThreadId,
+        commandId: CommandId.make(`stop-detached:${finished}`),
+      });
+      const stopped = yield* engine.getThreadProjection(childThreadId);
+      assert.equal(
+        stopped.runs.find((run) => run.id === child.runs[0]?.id)?.status,
+        terminal ? "completed" : "interrupted",
+      );
+      const independentAfterStop = stopped.runs.find((run) => run.id === independent.id);
+      assert.isUndefined(independentAfterStop?.delegatedTaskId);
+      assert.include(["queued", "starting"], independentAfterStop?.status);
+      if (terminal) assert.deepEqual(independentAfterStop, independent);
+      if (!finished)
+        assert.equal(
+          (yield* engine.getThreadProjection(grandchildThreadId)).runs[0]?.status,
+          "interrupted",
+        );
+      if (independentChildThreadId !== undefined)
+        assert.deepEqual(
+          yield* engine.getThreadProjection(independentChildThreadId),
+          independentChild,
+        );
+      if (!finished) {
+        // Recovery must not finalize a stopped task from its runs' text.
+        yield* engine.recoverDelegatedTasks;
+        const task = (yield* engine.getThreadProjection(parentThreadId)).subagents[0];
+        assert.equal(task?.completionDelivery?.state, "disposed");
+        assert.include(["cancelled", "interrupted"], task?.status);
+        assert.isNotNull(task?.result);
+      }
+      assert.equal(
+        (yield* engine.getThreadProjection(parentThreadId)).subagents.length,
+        parent.subagents.length,
       );
     }).pipe(Effect.provide(layerTest)),
 );

@@ -149,63 +149,63 @@ describe("thread relationships", () => {
     ]);
   });
 
-  it("combines subagent and transfer edges with archived shell state", () => {
-    const parent = ThreadId.make("thread-parent");
-    const child = ThreadId.make("thread-child");
-    const transferTarget = ThreadId.make("thread-transfer");
-    const graph = deriveThreadRelationshipGraph({
-      threads: [
-        {
-          id: parent,
-          title: "Parent",
-          status: "completed",
-          archivedAt: null,
-          forkedFrom: null,
-          lineage: { rootThreadId: parent, parentThreadId: null, relationshipToParent: null },
-        },
-        {
-          id: child,
-          title: "Subagent",
-          status: "completed",
-          archivedAt: "2026-06-24T00:00:00.000Z",
-          forkedFrom: null,
-          lineage: {
-            rootThreadId: parent,
-            parentThreadId: parent,
-            relationshipToParent: "subagent",
-          },
-        },
-      ] as never,
-      projection: {
-        thread: { id: parent },
-        subagents: [{ childThreadId: child, status: "completed" }],
-        contextTransfers: [
+  it.each([false, true])(
+    "combines task history with current shell lineage (detached: %s)",
+    (detached) => {
+      const parent = ThreadId.make("thread-parent");
+      const child = ThreadId.make("thread-child");
+      const transferTarget = ThreadId.make("thread-transfer");
+      const graph = deriveThreadRelationshipGraph({
+        threads: [
           {
+            id: parent,
+            title: "Parent",
+            status: "completed",
+            archivedAt: null,
+            forkedFrom: null,
+            lineage: { rootThreadId: parent, parentThreadId: null, relationshipToParent: null },
+          },
+          {
+            id: child,
+            title: "Subagent",
+            status: "completed",
+            archivedAt: "2026-06-24T00:00:00.000Z",
+            forkedFrom: null,
+            lineage: {
+              rootThreadId: parent,
+              parentThreadId: detached ? null : parent,
+              relationshipToParent: detached ? null : "subagent",
+              ...(detached ? { detachedFrom: { threadId: parent } } : {}),
+            },
+          },
+        ] as never,
+        projection: {
+          thread: { id: parent },
+          subagents: [{ childThreadId: child, status: "completed" }],
+          contextTransfers: [
+            {
+              sourceThreadId: child,
+              targetThreadId: transferTarget,
+              status: "completed",
+            },
+          ],
+        } as never,
+      });
+
+      expect(graph.nodes.get(child)?.thread?.archivedAt).not.toBeNull();
+      expect(graph.nodes.get(transferTarget)?.missing).toBe(true);
+      expect(graph.edges.some((edge) => edge.kind === "subagent")).toBe(!detached);
+      expect(graph.edges).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
             sourceThreadId: child,
             targetThreadId: transferTarget,
-            status: "completed",
-          },
-        ],
-      } as never,
-    });
-
-    expect(graph.nodes.get(child)?.thread?.archivedAt).not.toBeNull();
-    expect(graph.nodes.get(transferTarget)?.missing).toBe(true);
-    expect(graph.edges).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          sourceThreadId: parent,
-          targetThreadId: child,
-          kind: "subagent",
-        }),
-        expect.objectContaining({
-          sourceThreadId: child,
-          targetThreadId: transferTarget,
-          kind: "transfer",
-        }),
-      ]),
-    );
-  });
+            kind: "transfer",
+          }),
+        ]),
+      );
+    },
+  );
 
   it("keeps the live shell when an archived snapshot contains the same thread id", () => {
     const parent = ThreadId.make("thread-parent");

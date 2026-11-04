@@ -7,6 +7,7 @@ import {
   CheckpointId,
   CommandId,
   EventId,
+  EnvironmentId,
   MessageId,
   type ModelSelection,
   NodeId,
@@ -1270,7 +1271,7 @@ const seedRestartCancelledChild = (input: {
   readonly name: string;
   readonly completionWake: "always" | "settled_only";
   readonly continuationPending: boolean;
-  readonly runStatus?: "cancelled" | "completed";
+  readonly runStatus?: "cancelled" | "completed" | "running";
   readonly lostWork?: OrchestrationV2Run["restartCancelledBackgroundWork"];
   readonly now: DateTime.Utc;
 }) =>
@@ -3165,73 +3166,84 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
     }),
   );
 
-  it.effect("settles a cancelled child whose held wakes wait behind it", () =>
-    Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const eventSink = yield* EventSink.EventSinkV2;
-      const now = yield* DateTime.now;
-      const threadId = ThreadId.make("thread:held-wake-parent");
-      const projectId = ProjectId.make("project:held-wake-parent");
-      const runId = RunId.make("run:held-wake-parent");
-      const rootNodeId = NodeId.make("node:held-wake-parent-root");
-      yield* seedParentWithTerminalTask({
-        threadId,
-        projectId,
-        runId,
-        rootNodeId,
-        taskId: NodeId.make("node:held-wake-parent-settled"),
-        deliveryState: "delivered",
-        now,
-      });
-      const child = yield* seedRestartCancelledChild({
-        parentThreadId: threadId,
-        projectId,
-        parentRunId: runId,
-        rootNodeId,
-        name: "held-wake-child",
-        completionWake: "always",
-        continuationPending: false,
-        now,
-      });
-      const held = runEvent({
-        threadId: child.childThreadId,
-        runId: RunId.make("run:held-wake-child:2"),
-        ordinal: 2,
-        status: "queued",
-        now,
-      });
-      yield* eventSink.write({
-        commandId: CommandId.make("command:held-wake-child:held"),
-        events: [
-          {
-            ...held,
-            payload: { ...held.payload, startedAt: null, completedAt: null, queueHeld: true },
-          },
-        ],
-      });
+  it.effect.each([false, true])(
+    "settles a cancelled child whose held wakes wait behind it (detached: %s)",
+    (detached) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make(`thread:held-wake-parent:${detached}`);
+        const projectId = ProjectId.make(`project:held-wake-parent:${detached}`);
+        const runId = RunId.make(`run:held-wake-parent:${detached}`);
+        const rootNodeId = NodeId.make(`node:held-wake-parent-root:${detached}`);
+        yield* seedParentWithTerminalTask({
+          threadId,
+          projectId,
+          runId,
+          rootNodeId,
+          taskId: NodeId.make(`node:held-wake-parent-settled:${detached}`),
+          deliveryState: "delivered",
+          now,
+        });
+        const child = yield* seedRestartCancelledChild({
+          parentThreadId: threadId,
+          projectId,
+          parentRunId: runId,
+          rootNodeId,
+          name: `held-wake-child:${detached}`,
+          completionWake: "always",
+          continuationPending: false,
+          now,
+        });
+        const held = runEvent({
+          threadId: child.childThreadId,
+          runId: RunId.make(`run:held-wake-child:2:${detached}`),
+          ordinal: 2,
+          status: "queued",
+          now,
+        });
+        yield* eventSink.write({
+          commandId: CommandId.make(`command:held-wake-child:held:${detached}`),
+          events: [
+            {
+              ...held,
+              payload: { ...held.payload, startedAt: null, completedAt: null, queueHeld: true },
+            },
+          ],
+        });
 
-      yield* orchestrator.recoverDelegatedTasks;
+        if (detached) {
+          yield* orchestrator.dispatch({
+            type: "thread.detach",
+            commandId: CommandId.make(`detach-held-wake:${detached}`),
+            threadId: child.childThreadId,
+            grouped: true,
+          });
+        }
+        yield* orchestrator.recoverDelegatedTasks;
 
-      const recovered = yield* orchestrator.getThreadProjection(threadId);
-      const task = recovered.subagents.find((row) => row.id === child.taskId);
-      assert.equal(task?.status, "cancelled");
-      assert.isNotNull(task?.result ?? null);
-      assert.isTrue(
-        recovered.contextTransfers.some(
-          (transfer) =>
-            transfer.type === "subagent_result" && transfer.sourceThreadId === child.childThreadId,
-        ),
-      );
-      assert.isFalse(yield* orchestrator.delegatedTaskResultPending(child.childThreadId));
-      const childProjection = yield* orchestrator.getThreadProjection(child.childThreadId);
-      assert.deepEqual(
-        childProjection.runs.map((run) => [run.status, run.queueHeld ?? false]),
-        [
-          ["cancelled", false],
-          ["queued", true],
-        ],
-      );
-    }),
+        const recovered = yield* orchestrator.getThreadProjection(threadId);
+        const task = recovered.subagents.find((row) => row.id === child.taskId);
+        assert.equal(task?.status, "cancelled");
+        assert.isNotNull(task?.result ?? null);
+        assert.isTrue(
+          recovered.contextTransfers.some(
+            (transfer) =>
+              transfer.type === "subagent_result" &&
+              transfer.sourceThreadId === child.childThreadId,
+          ),
+        );
+        assert.isFalse(yield* orchestrator.delegatedTaskResultPending(child.childThreadId));
+        const childProjection = yield* orchestrator.getThreadProjection(child.childThreadId);
+        assert.deepEqual(
+          childProjection.runs.map((run) => [run.status, run.queueHeld ?? false]),
+          [
+            ["cancelled", false],
+            ["queued", true],
+          ],
+        );
+      }),
   );
 
   it.effect("settles a child whose provider failure holds its queued wakes", () =>
@@ -3704,6 +3716,651 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
         );
         assert.equal(finished?.status, "completed");
         assert.notEqual(finished?.completionDelivery?.state, "disposed");
+      }),
+  );
+});
+
+it.layer(layerTest)("detach delegated sessions", (it) => {
+  it.effect("validates local node-fork eligibility and refuses a deleted parent on reattach", () =>
+    Effect.gen(function* () {
+      const engine = yield* Orchestrator.OrchestratorV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const parentThreadId = ThreadId.make("thread:detach-validation");
+      const projectId = ProjectId.make("project:detach-validation");
+      const parentRunId = RunId.make("run:detach-validation");
+      const rootNodeId = NodeId.make("node:detach-validation");
+      yield* seedParentWithTerminalTask({
+        threadId: parentThreadId,
+        projectId,
+        runId: parentRunId,
+        rootNodeId,
+        taskId: NodeId.make("task:detach-validation-seed"),
+        deliveryState: "acknowledged",
+        now,
+      });
+      const child = yield* seedRestartCancelledChild({
+        parentThreadId,
+        projectId,
+        parentRunId,
+        rootNodeId,
+        name: "detach-validation-child",
+        completionWake: "settled_only",
+        continuationPending: false,
+        now,
+      });
+      const thread = (yield* engine.getThreadProjection(child.childThreadId)).thread;
+      for (const [name, invalid] of [
+        ["provider", { ...thread, creationSource: "provider" as const }],
+        ["not-node", { ...thread, forkedFrom: null }],
+        [
+          "top-level",
+          {
+            ...thread,
+            lineage: { ...thread.lineage, relationshipToParent: null, parentThreadId: null },
+          },
+        ],
+        ["deleted", { ...thread, deletedAt: now }],
+      ] as const) {
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(`event:invalid:${name}`),
+              type: "thread.metadata-updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: invalid,
+            },
+          ],
+        });
+        assert.instanceOf(
+          yield* engine
+            .dispatch({
+              type: "thread.detach",
+              threadId: child.childThreadId,
+              commandId: CommandId.make(`detach-invalid:${name}`),
+              grouped: true,
+            })
+            .pipe(Effect.flip),
+          Orchestrator.OrchestratorDispatchError,
+        );
+      }
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:restore-detach-validation"),
+            type: "thread.metadata-updated",
+            threadId: child.childThreadId,
+            occurredAt: now,
+            payload: {
+              ...thread,
+              delegatedFrom: {
+                environmentId: EnvironmentId.make("environment:remote"),
+                threadId: ThreadId.make("thread:remote"),
+                title: "Remote",
+              },
+            },
+          },
+        ],
+      });
+      yield* engine.dispatch({
+        type: "thread.detach",
+        threadId: child.childThreadId,
+        commandId: CommandId.make("detach-inherited-remote"),
+        grouped: true,
+      });
+      const parent = (yield* engine.getThreadProjection(parentThreadId)).thread;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:deleted-detach-parent"),
+            type: "thread.deleted",
+            threadId: parentThreadId,
+            occurredAt: now,
+            payload: { ...parent, deletedAt: now },
+          },
+        ],
+      });
+      assert.instanceOf(
+        yield* engine
+          .dispatch({
+            type: "thread.reattach",
+            threadId: child.childThreadId,
+            commandId: CommandId.make("reattach-deleted-parent"),
+          })
+          .pipe(Effect.flip),
+        Orchestrator.OrchestratorDispatchError,
+      );
+    }),
+  );
+  it.effect.each(["background", "command", "question", "delegated"] as const)(
+    "follows a detached task through its %s wake chain",
+    (wake) =>
+      Effect.gen(function* () {
+        const engine = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make(`thread:wake-parent:${wake}`);
+        const projectId = ProjectId.make(`project:wake-chain:${wake}`);
+        const parentRunId = RunId.make(`run:wake-parent:${wake}`);
+        const rootNodeId = NodeId.make(`node:wake-parent:${wake}`);
+        yield* seedParentWithTerminalTask({
+          threadId: parentThreadId,
+          projectId,
+          runId: parentRunId,
+          rootNodeId,
+          taskId: NodeId.make(`task:wake-seed:${wake}`),
+          deliveryState: "acknowledged",
+          now,
+        });
+        const child = yield* seedRestartCancelledChild({
+          parentThreadId,
+          projectId,
+          parentRunId,
+          rootNodeId,
+          name: `wake-child:${wake}`,
+          completionWake: "settled_only",
+          continuationPending: false,
+          runStatus: "running",
+          now,
+        });
+        const provider = (yield* engine.getThreadProjection(parentThreadId)).providerThreads[0];
+        const original = (yield* engine.getThreadProjection(child.childThreadId)).runs[0];
+        if (provider === undefined || original === undefined)
+          return yield* Effect.die("missing seeded run");
+        const providerThreadId = ProviderThreadId.make(`provider:wake-child:${wake}`);
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(`event:wake-provider:${wake}`),
+              type: "provider-thread.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: {
+                ...provider,
+                id: providerThreadId,
+                appThreadId: child.childThreadId,
+                ownerNodeId: null,
+              },
+            },
+            {
+              id: EventId.make(`event:wake-original-provider:${wake}`),
+              type: "run.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: { ...original, providerThreadId },
+            },
+          ],
+        });
+        yield* engine.dispatch({
+          type: "thread.detach",
+          commandId: CommandId.make(`detach-wake:${wake}`),
+          threadId: child.childThreadId,
+          grouped: true,
+        });
+        let previous = (yield* engine.getThreadProjection(child.childThreadId)).runs[0];
+        if (previous === undefined) return yield* Effect.die("missing bound run");
+        for (const generation of [1, 2]) {
+          const messageId = MessageId.make(`message:wake:${wake}:${generation}`);
+          yield* sink.write({
+            commandId: reconcileCommandId(`wake-source:${wake}:${generation}`),
+            events: [
+              {
+                id: EventId.make(`event:wake-source:${wake}:${generation}`),
+                type: "run.updated",
+                threadId: child.childThreadId,
+                occurredAt: now,
+                payload: {
+                  ...previous,
+                  status: "completed",
+                  startedAt: now,
+                  completedAt: now,
+                  delegatedCompletion: {
+                    disposition: "open",
+                    nextGeneration: generation + 1,
+                    delivery: {
+                      generation,
+                      messageId,
+                      taskIds: [NodeId.make(`task:wake:${wake}`)],
+                    },
+                  },
+                },
+              },
+            ],
+          });
+          yield* engine.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`dispatch-wake:${wake}:${generation}`),
+            threadId: child.childThreadId,
+            messageId,
+            text: generation === 1 ? "Waiting for tasks" : "Real answer",
+            attachments: [],
+            dispatchMode: { type: "queue_after_active" },
+            createdBy: "agent",
+            creationSource: "server",
+            ...(wake === "delegated"
+              ? {
+                  delegatedCompletion: {
+                    parentRunId: previous.id,
+                    generation,
+                    taskIds: [NodeId.make(`task:wake:${wake}`)],
+                  },
+                }
+              : {
+                  notification: {
+                    source:
+                      wake === "background"
+                        ? { kind: "background_task" as const }
+                        : wake === "command"
+                          ? { kind: "command" as const }
+                          : {
+                              kind: "delegated_task" as const,
+                              taskIds: [NodeId.make(`task:wake:${wake}`)],
+                            },
+                    outcome: "updated" as const,
+                    summary: "Background finished",
+                  },
+                }),
+          });
+          const next = (yield* engine.getThreadProjection(child.childThreadId)).runs.at(-1);
+          if (next === undefined) return yield* Effect.die("missing wake run");
+          assert.equal(next.delegatedTaskId, child.taskId);
+          previous = next;
+          yield* engine.recoverDelegatedTasks;
+          assert.isNull(
+            (yield* engine.getThreadProjection(parentThreadId)).subagents.find(
+              (task) => task.id === child.taskId,
+            )?.result,
+          );
+        }
+        yield* sink.write({
+          commandId: reconcileCommandId(`wake-answer:${wake}`),
+          events: [
+            {
+              id: EventId.make(`event:wake-answer:${wake}`),
+              type: "run.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: { ...previous, status: "completed", startedAt: now, completedAt: now },
+            },
+            {
+              id: EventId.make(`event:wake-real-answer:${wake}`),
+              type: "message.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: {
+                id: MessageId.make(`message:wake-real-answer:${wake}`),
+                threadId: child.childThreadId,
+                runId: previous.id,
+                nodeId: previous.rootNodeId,
+                role: "assistant",
+                text: "Real answer",
+                attachments: [],
+                streaming: false,
+                createdBy: "agent",
+                creationSource: "provider",
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+          ],
+        });
+        yield* engine.recoverDelegatedTasks;
+        const parent = yield* engine.getThreadProjection(parentThreadId);
+        assert.equal(
+          parent.subagents.find((task) => task.id === child.taskId)?.result,
+          "Real answer",
+        );
+        assert.equal(
+          parent.contextTransfers.find(
+            (transfer) => transfer.sourceThreadId === child.childThreadId,
+          )?.sourcePoint.runId,
+          previous.id,
+        );
+        yield* engine.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`independent-wake:${wake}`),
+          threadId: child.childThreadId,
+          messageId: MessageId.make(`message:independent-wake:${wake}`),
+          text: "Independent",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        assert.isUndefined(
+          (yield* engine.getThreadProjection(child.childThreadId)).runs.at(-1)?.delegatedTaskId,
+        );
+      }),
+  );
+  it.effect.each(["held", "missing", "finalize-failure"] as const)(
+    "handles detach with %s work",
+    (state) =>
+      Effect.gen(function* () {
+        const engine = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make(`thread:detach-edge-parent:${state}`);
+        const projectId = ProjectId.make(`project:detach-edge:${state}`);
+        const parentRunId = RunId.make(`run:detach-edge:${state}`);
+        const rootNodeId = NodeId.make(`node:detach-edge:${state}`);
+        yield* seedParentWithTerminalTask({
+          threadId: parentThreadId,
+          projectId,
+          runId: parentRunId,
+          rootNodeId,
+          taskId: NodeId.make(`task:detach-edge-seed:${state}`),
+          deliveryState: "acknowledged",
+          now,
+        });
+        const child = yield* seedRestartCancelledChild({
+          parentThreadId,
+          projectId,
+          parentRunId,
+          rootNodeId,
+          name: `detach-edge:${state}`,
+          completionWake: "settled_only",
+          continuationPending: false,
+          runStatus: "running",
+          now,
+        });
+        const run = (yield* engine.getThreadProjection(child.childThreadId)).runs[0];
+        assert.isDefined(run);
+        if (run === undefined) return;
+        yield* sink.write({
+          commandId: reconcileCommandId(`detach-edge:${state}`),
+          events: [
+            {
+              id: EventId.make(`event:detach-edge:${state}`),
+              type: "run.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: {
+                ...run,
+                status:
+                  state === "held" ? "queued" : state === "missing" ? "rolled_back" : "completed",
+                queueHeld: state === "held",
+                completedAt: state === "held" ? null : now,
+              },
+            },
+          ],
+        });
+        using _finalize =
+          state === "finalize-failure"
+            ? vi
+                .spyOn(sink, "writeWithEffects")
+                .mockImplementation(() => Effect.die("finalize unavailable"))
+            : undefined;
+        const result = yield* engine
+          .dispatch({
+            type: "thread.detach",
+            threadId: child.childThreadId,
+            commandId: CommandId.make(`detach-edge:${state}`),
+            grouped: true,
+          })
+          .pipe(Effect.result);
+        if (state === "missing") {
+          assert.equal(result._tag, "Failure");
+          assert.equal(
+            (yield* engine.getThreadProjection(child.childThreadId)).thread.lineage
+              .relationshipToParent,
+            "subagent",
+          );
+        } else {
+          assert.equal(result._tag, "Success");
+          assert.equal(
+            (yield* engine.getThreadProjection(child.childThreadId)).runs[0]?.delegatedTaskId,
+            child.taskId,
+          );
+        }
+      }),
+  );
+  it.effect.each(["running", "completed", "race"] as const)(
+    "binds the original %s run and delivers only that work after detach",
+    (runStatus) =>
+      Effect.gen(function* () {
+        const engine = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make(`thread:detach-parent:${runStatus}`);
+        const projectId = ProjectId.make(`project:detach:${runStatus}`);
+        const parentRunId = RunId.make(`run:detach-parent:${runStatus}`);
+        const rootNodeId = NodeId.make(`node:detach-parent:${runStatus}`);
+        yield* seedParentWithTerminalTask({
+          threadId: parentThreadId,
+          projectId,
+          runId: parentRunId,
+          rootNodeId,
+          taskId: NodeId.make(`task:detach-seed:${runStatus}`),
+          deliveryState: "acknowledged",
+          now,
+        });
+        const child = yield* seedRestartCancelledChild({
+          parentThreadId,
+          projectId,
+          parentRunId,
+          rootNodeId,
+          name: `detach-child:${runStatus}`,
+          completionWake: "settled_only",
+          continuationPending: false,
+          runStatus: runStatus === "race" ? "running" : runStatus,
+          now,
+        });
+        const providerThreadId = ProviderThreadId.make(`provider-thread:detach-child:${runStatus}`);
+        const parentProvider = (yield* engine.getThreadProjection(parentThreadId))
+          .providerThreads[0]!;
+        const originalRun = (yield* engine.getThreadProjection(child.childThreadId)).runs[0]!;
+        yield* sink.write({
+          commandId: reconcileCommandId(`detach-provider:${runStatus}`),
+          events: [
+            {
+              id: EventId.make(`event:detach-provider:${runStatus}`),
+              type: "provider-thread.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: {
+                ...parentProvider,
+                id: providerThreadId,
+                appThreadId: child.childThreadId,
+                ownerNodeId: null,
+              },
+            },
+            {
+              id: EventId.make(`event:detach-run-provider:${runStatus}`),
+              type: "run.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: { ...originalRun, providerThreadId },
+            },
+          ],
+        });
+        const detach = {
+          type: "thread.detach" as const,
+          commandId: CommandId.make(`detach:${runStatus}`),
+          threadId: child.childThreadId,
+          grouped: false,
+        };
+        {
+          const commit = sink.commitCommand;
+          using _race =
+            runStatus === "race"
+              ? vi.spyOn(sink, "commitCommand").mockImplementation((input) =>
+                  Effect.gen(function* () {
+                    if (input.commandId === detach.commandId) {
+                      yield* sink.write({
+                        commandId: reconcileCommandId("detach-race-completed"),
+                        events: [
+                          {
+                            id: EventId.make("event:detach-race-completed"),
+                            type: "run.updated",
+                            threadId: child.childThreadId,
+                            occurredAt: now,
+                            payload: {
+                              ...originalRun,
+                              providerThreadId,
+                              status: "completed",
+                              completedAt: now,
+                            },
+                          },
+                        ],
+                      });
+                    }
+                    return yield* commit(input);
+                  }),
+                )
+              : undefined;
+          yield* engine.dispatch(detach);
+        }
+        const detached = yield* engine.getThreadProjection(child.childThreadId);
+        assert.deepEqual(detached.thread.lineage, {
+          parentThreadId: null,
+          relationshipToParent: null,
+          rootThreadId: parentThreadId,
+          detachedFrom: { threadId: parentThreadId },
+          groupThreadId: child.childThreadId,
+        });
+        assert.equal(detached.runs[0]?.delegatedTaskId, child.taskId);
+        if (runStatus === "race") assert.equal(detached.runs[0]?.status, "completed");
+        yield* engine.dispatch(detach);
+        yield* engine.dispatch({
+          ...detach,
+          commandId: CommandId.make(`regroup:${runStatus}`),
+          grouped: true,
+        });
+        assert.isUndefined(
+          (yield* engine.getThreadProjection(child.childThreadId)).thread.lineage.groupThreadId,
+        );
+        yield* engine.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`send-independent:${runStatus}`),
+          threadId: child.childThreadId,
+          messageId: MessageId.make(`message:independent:${runStatus}`),
+          text: "Independent follow-up",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const independent = (yield* engine.getThreadProjection(child.childThreadId)).runs.at(-1)!;
+        assert.isUndefined(independent.delegatedTaskId);
+        assert.lengthOf((yield* engine.getThreadProjection(parentThreadId)).subagents, 2);
+        const independentRunId = independent.id;
+        assert.instanceOf(
+          yield* engine
+            .dispatch({
+              type: "thread.reattach",
+              commandId: CommandId.make(`reattach-queued:${runStatus}`),
+              threadId: child.childThreadId,
+            })
+            .pipe(Effect.flip),
+          Orchestrator.OrchestratorDispatchError,
+        );
+        yield* sink.write({
+          events: [
+            {
+              ...runEvent({
+                threadId: child.childThreadId,
+                runId: independentRunId,
+                ordinal: 2,
+                status: "running",
+                now,
+              }),
+              id: EventId.make(`event:independent-running:${runStatus}`),
+            },
+          ],
+        });
+        const refused = yield* engine
+          .dispatch({
+            type: "thread.reattach",
+            commandId: CommandId.make(`reattach-active:${runStatus}`),
+            threadId: child.childThreadId,
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(refused, Orchestrator.OrchestratorDispatchError);
+        yield* sink.write({
+          commandId: reconcileCommandId(`independent-complete-before-reattach:${runStatus}`),
+          events: [
+            {
+              ...runEvent({
+                threadId: child.childThreadId,
+                runId: independentRunId,
+                ordinal: 2,
+                status: "completed",
+                now,
+              }),
+              id: EventId.make(`event:independent-pre-reattach:${runStatus}`),
+            },
+          ],
+        });
+        yield* engine.dispatch({
+          type: "thread.reattach",
+          commandId: CommandId.make(`reattach-pending-original:${runStatus}`),
+          threadId: child.childThreadId,
+        });
+        yield* engine.dispatch({
+          type: "thread.detach",
+          commandId: CommandId.make(`detach-again:${runStatus}`),
+          threadId: child.childThreadId,
+          grouped: true,
+        });
+        assert.isUndefined(
+          (yield* engine.getThreadProjection(child.childThreadId)).runs.find(
+            (run) => run.id === independentRunId,
+          )?.delegatedTaskId,
+        );
+        if (runStatus === "running") {
+          yield* sink.write({
+            events: [
+              runEvent({
+                threadId: child.childThreadId,
+                runId: child.childRunId,
+                ordinal: 1,
+                status: "completed",
+                now,
+              }),
+            ],
+          });
+        }
+        yield* engine.recoverDelegatedTasks;
+        const parent = yield* engine.getThreadProjection(parentThreadId);
+        const task = parent.subagents.find((task) => task.id === child.taskId)!;
+        assert.isNotNull(task.result);
+        assert.equal(
+          parent.contextTransfers.find(
+            (transfer) => transfer.sourceThreadId === child.childThreadId,
+          )?.sourcePoint.runId,
+          child.childRunId,
+        );
+        assert.equal(
+          (yield* engine.getThreadProjection(child.childThreadId)).runs[0]?.delegatedTaskId,
+          child.taskId,
+        );
+        yield* sink.write({
+          events: [
+            runEvent({
+              threadId: child.childThreadId,
+              runId: independentRunId,
+              ordinal: 2,
+              status: "completed",
+              now,
+            }),
+          ],
+        });
+        yield* engine.recoverDelegatedTasks;
+        assert.equal(
+          (yield* engine.getThreadProjection(parentThreadId)).subagents.length,
+          parent.subagents.length,
+        );
+        yield* engine.dispatch({
+          type: "thread.reattach",
+          commandId: CommandId.make(`reattach:${runStatus}`),
+          threadId: child.childThreadId,
+        });
+        assert.deepEqual((yield* engine.getThreadProjection(child.childThreadId)).thread.lineage, {
+          parentThreadId,
+          relationshipToParent: "subagent",
+          rootThreadId: parentThreadId,
+        });
       }),
   );
 });

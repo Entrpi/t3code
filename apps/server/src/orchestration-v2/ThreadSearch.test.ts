@@ -447,6 +447,37 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       `;
       assert.strictEqual((yield* changes) - before, 1);
       assert.deepEqual(yield* indexedThreads, [parent]);
+      yield* projections.apply(
+        message(subagent, "index-notice", "user", "generated notice", { createdBy: "agent" }),
+      );
+      yield* projections.apply(
+        message(subagent, "index-streaming", "assistant", "streaming", { streaming: true }),
+      );
+      const child = yield* projections.getThread(subagent);
+      for (const type of ["thread.detached", "thread.reattached", "thread.pinned"] as const) {
+        const attached = type === "thread.reattached";
+        yield* projections.apply({
+          id: EventId.make(`event:index:${type}`),
+          type,
+          threadId: subagent,
+          occurredAt: at(2),
+          payload: {
+            ...child,
+            lineage: attached
+              ? child.lineage
+              : {
+                  parentThreadId: null,
+                  relationshipToParent: null,
+                  rootThreadId: parent,
+                  detachedFrom: { threadId: parent },
+                },
+          },
+        });
+        assert.deepEqual(
+          (yield* indexedThreads).toSorted(),
+          attached ? [parent] : [parent, subagent].toSorted(),
+        );
+      }
     }),
   );
 });

@@ -399,6 +399,64 @@ it.effect("rejects an unknown organize target instead of archiving the calling t
   );
 });
 
+it.effect.each(["detach", "reattach"] as const)(
+  "refuses an agent's own %s but permits other callers",
+  (action) =>
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      for (const [target, invocation, refused] of [
+        [undefined, scope, true],
+        [threadId, scope, true],
+        [ThreadId.make("other-thread"), scope, false],
+        [
+          threadId,
+          {
+            ...scope,
+            thread: undefined,
+            client: { sessionId: "user", label: "User", access: "full-access" as const },
+          },
+          false,
+        ],
+      ] as const) {
+        const result = yield* server
+          .callTool({
+            name: "t3_thread_organize",
+            arguments: { action, ...(target === undefined ? {} : { threadId: target }) },
+          })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        if (refused)
+          expect(declaredFailure(result)).toMatchObject({
+            code: "invalid_request",
+            message: expect.stringContaining("own thread"),
+          });
+        else expect(result.isError).not.toBe(true);
+      }
+    }).pipe(
+      Effect.provide(
+        layerThreadToolkit.pipe(
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+              getProjectThreadRecords: ({ threadId: id }) =>
+                Effect.succeed(
+                  McpToolAccessTestkit.idleThreadProjection(
+                    McpToolAccessTestkit.liveThreadShell(id),
+                  ),
+                ),
+              detachThread: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+              reattachThread: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+            }),
+          ),
+        ),
+      ),
+    ),
+);
+
 it.effect("keeps unexpected handler defects private through the production registration", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;

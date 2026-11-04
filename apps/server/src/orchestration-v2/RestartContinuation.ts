@@ -2,6 +2,8 @@ import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   CommandId,
+  delegatingParentThreadId,
+  taskIdOfRun,
   isOrchestrationV2WorkActive,
   latestProviderTurnForAttempt,
   MessageId,
@@ -262,15 +264,10 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
     )
       return;
     // A parent's Stop reaches its open delegated tasks through an effect a restart can cut short.
-    const { lineage, forkedFrom } = projection.thread;
-    const taskId =
-      source.delegatedTaskId ?? (forkedFrom?.type === "node" ? forkedFrom.nodeId : undefined);
-    if (
-      lineage.relationshipToParent === "subagent" &&
-      lineage.parentThreadId !== null &&
-      taskId !== undefined
-    ) {
-      const task = (yield* threads.getThreadRecords(lineage.parentThreadId, ["subagents"], {
+    const parentThreadId = delegatingParentThreadId(projection.thread.lineage);
+    const taskId = taskIdOfRun(projection.thread, source);
+    if (parentThreadId !== undefined && taskId !== undefined) {
+      const task = (yield* threads.getThreadRecords(parentThreadId, ["subagents"], {
         subagentIds: [taskId],
       })).subagents.find((candidate) => candidate.id === taskId);
       // A settled task no longer owns later work in its thread.
@@ -280,7 +277,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
           : null;
       if (
         parentRunId !== null &&
-        (yield* threads.getThreadRecords(lineage.parentThreadId, ["turnItems"], {
+        (yield* threads.getThreadRecords(parentThreadId, ["turnItems"], {
           turnItemTypes: ["run_interrupt_request"],
           turnItemRunIds: [parentRunId],
         })).turnItems.length > 0

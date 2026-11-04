@@ -156,12 +156,28 @@ export const OrchestrationV2AppThreadLineage = Schema.Struct({
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   rootThreadId: ThreadId,
   sideChat: Schema.optional(Schema.Boolean),
+  detachedFrom: Schema.optional(Schema.Struct({ threadId: ThreadId })),
+  groupThreadId: Schema.optional(ThreadId),
 });
 export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLineage.Type;
 
 /** Subagents and side chats live inside their parent's view, never in thread lists. */
 export const isListedThreadLineage = (lineage: OrchestrationV2AppThreadLineage): boolean =>
   lineage.relationshipToParent !== "subagent" && lineage.sideChat !== true;
+
+export const delegatingParentThreadId = (lineage: OrchestrationV2AppThreadLineage) =>
+  lineage.relationshipToParent === "subagent"
+    ? (lineage.parentThreadId ?? undefined)
+    : lineage.detachedFrom?.threadId;
+
+export const taskIdOfRun = (
+  thread: Pick<OrchestrationV2AppThread, "lineage" | "forkedFrom">,
+  run: Pick<OrchestrationV2Run, "delegatedTaskId">,
+) =>
+  run.delegatedTaskId ??
+  (thread.lineage.detachedFrom === undefined && thread.forkedFrom?.type === "node"
+    ? thread.forkedFrom.nodeId
+    : undefined);
 
 export const OrchestrationV2ContextTransferType = Schema.Literals([
   "fork",
@@ -1897,6 +1913,8 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.unsettled",
       "thread.snoozed",
       "thread.unsnoozed",
+      "thread.detached",
+      "thread.reattached",
       "thread.pinned",
       "thread.auto-settle-set",
       "thread.unpinned",
@@ -1929,6 +1947,11 @@ export const OrchestrationV2DomainEvent = Schema.Union([
     ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("run.updated"),
     payload: OrchestrationV2Run,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("run.delegated-task-bound"),
+    payload: Schema.Struct({ runId: RunId, delegatedTaskId: NodeId }),
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
@@ -2801,6 +2824,8 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.unsettled",
       "thread.snoozed",
       "thread.unsnoozed",
+      "thread.detached",
+      "thread.reattached",
       "thread.pinned",
       "thread.auto-settle-set",
       "thread.unpinned",
@@ -2833,6 +2858,11 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
     ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("run.updated"),
     payload: OrchestrationV2RunJson,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("run.delegated-task-bound"),
+    payload: Schema.Struct({ runId: RunId, delegatedTaskId: NodeId }),
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
@@ -3036,6 +3066,17 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     enabled: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.detach"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    grouped: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.reattach"),
+    commandId: CommandId,
+    threadId: ThreadId,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pin"),

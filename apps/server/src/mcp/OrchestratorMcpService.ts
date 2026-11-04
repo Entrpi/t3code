@@ -1,4 +1,6 @@
 import {
+  delegatingParentThreadId,
+  taskIdOfRun,
   CommandId,
   type RunId,
   isProviderAvailable,
@@ -553,24 +555,13 @@ function directAppOwnedChildTasks(
   target: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
   returnedRunIds: ReadonlySet<RunId | null>,
 ): ReadonlyArray<OrchestrationV2Subagent> {
-  if (
-    target.thread.lineage.parentThreadId !== parent.thread.id ||
-    target.thread.lineage.relationshipToParent !== "subagent"
-  ) {
+  if (delegatingParentThreadId(target.thread.lineage) !== parent.thread.id) {
     return [];
   }
-  const original = parent.subagents.find(
-    (task) =>
-      task.origin === "app_owned" &&
-      task.threadId === parent.thread.id &&
-      task.id ===
-        (target.thread.forkedFrom?.type === "node" ? target.thread.forkedFrom.nodeId : undefined) &&
-      task.childThreadId === target.thread.id,
-  );
   const taskIds = new Set(
     target.runs
       .filter((run) => returnedRunIds.has(run.id))
-      .map((run) => run.delegatedTaskId ?? original?.id),
+      .map((run) => taskIdOfRun(target.thread, run)),
   );
   return parent.subagents.filter(
     (task) =>
@@ -2583,15 +2574,17 @@ const make = Effect.gen(function* () {
       }
       const key = yield* requestKey(input.clientRequestId);
       const parentProjection = yield* loadThreadRecords(scope.thread.threadId, []);
-      // Cancelling stops the child and every task under it, each a write to a
-      // thread its user may have raised above the parent's modes since it was
-      // delegated. All of them are checked before anything is stopped.
+      const parentTask = (yield* loadTasks(scope.thread.threadId, [input.taskId])).find(
+        (task) => task.id === input.taskId && task.origin === "app_owned",
+      );
       const assertStoppable = Effect.fn("OrchestratorMcpService.assertStoppable")(function* (
         threadId: ThreadId,
       ): Effect.fn.Return<void, OrchestratorMcpFailure> {
         const shell = yield* threadManagement
           .getThreadShell(threadId)
           .pipe(Effect.mapError(threadManagementFailure));
+        const detached = shell?.lineage.detachedFrom !== undefined;
+        if (detached && threadId === childThreadId && parentTask?.result !== null) return;
         if (shell !== null && shell.deletedAt === null) {
           yield* resolveRuntimeMode(parentProjection.thread.runtimeMode, shell.runtimeMode);
           yield* resolveInteractionMode(
@@ -2599,6 +2592,7 @@ const make = Effect.gen(function* () {
             shell.interactionMode,
           );
         }
+        if (detached) return;
         const childThreadIds = yield* threadManagement
           .listAppOwnedChildThreadIds(threadId)
           .pipe(Effect.mapError(threadManagementFailure));
@@ -2607,9 +2601,6 @@ const make = Effect.gen(function* () {
         }
       });
       yield* assertStoppable(childThreadId);
-      const parentTask = (yield* loadTasks(scope.thread.threadId, [input.taskId])).find(
-        (task) => task.id === input.taskId && task.origin === "app_owned",
-      );
       const disposeCompletionDelivery =
         parentTask?.completionDelivery?.state === "disposed"
           ? Effect.void
@@ -2636,12 +2627,12 @@ const make = Effect.gen(function* () {
       const stopChild = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "cancel-task" });
         const reason = agentStopReason(input.reason);
-        yield* threadManagement
-          .dispatch({
-            type: "thread.stop",
-            commandId,
+        const attached = yield* threadManagement
+          .stopDelegatedChild({
+            parentThreadId: scope.thread.threadId,
             threadId: childThreadId,
-            stopDelegatedTasks: false,
+            taskId: input.taskId,
+            commandId,
             reason,
           })
           .pipe(
@@ -2652,8 +2643,14 @@ const make = Effect.gen(function* () {
               ),
             ),
           );
+        if (attached === false) return;
         yield* threadManagement
-          .stopDelegatedTasks({ threadId: childThreadId, commandId, reason })
+          .stopDelegatedTasks({
+            threadId: childThreadId,
+            commandId,
+            reason,
+            ...(attached === true ? {} : { runIds: attached.runIds }),
+          })
           .pipe(
             Effect.mapError((error) =>
               failure(
@@ -2735,7 +2732,6 @@ const make = Effect.gen(function* () {
         return subagents.some((task) => task.id === input.taskId && task.status === "cancelled");
       }).pipe(Effect.mapError(threadManagementFailure));
       if (isTerminalTaskStatus(current.status)) {
-        // The child can still run work for another turn, so it is stopped either way.
         yield* stopWithinLimit;
         const cancelled = yield* cancelOrphan;
         yield* disposeCompletionDelivery;

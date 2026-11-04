@@ -120,6 +120,9 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           parentThreadId: input.sourceProjection.thread.id,
           relationshipToParent: "fork",
           rootThreadId: input.sourceProjection.thread.lineage.rootThreadId,
+          ...(input.sourceProjection.thread.lineage.groupThreadId === undefined
+            ? {}
+            : { groupThreadId: input.sourceProjection.thread.lineage.groupThreadId }),
           ...(input.sideChat ? { sideChat: true } : {}),
         },
         forkedFrom:

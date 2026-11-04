@@ -46,7 +46,7 @@ const emptyShellSnapshot = {
 
 describe("subagent shell events", () => {
   const stored = (threadId: string, type: string) =>
-    ({ event: { threadId, type } }) as ApplicationStoredEvent;
+    ({ event: { threadId, type, payload: {} } }) as ApplicationStoredEvent;
 
   it("keeps regular threads and subagent state changes while omitting subagent transcript updates", () => {
     const subagents = new Set(["child"]);
@@ -67,6 +67,56 @@ describe("subagent shell events", () => {
     );
   });
 
+  it("tracks current lineage through detach, reattach and compacted payloads", () => {
+    const childId = ThreadId.make("child");
+    const parentId = ThreadId.make("parent");
+    const parents = new Map<string, SubagentParent>();
+    const subagents = new Set<string>();
+    for (const type of [
+      "thread.created",
+      "thread.detached",
+      "thread.reattached",
+      "thread.pinned",
+      "thread.visited",
+      "thread.metadata-updated",
+      "thread.settled",
+    ] as const) {
+      const attached = type !== "thread.detached" && type !== "thread.pinned";
+      const event = {
+        sequence: 1,
+        event: {
+          type,
+          threadId: childId,
+          payload: {
+            creationSource: "server",
+            archivedAt: null,
+            deletedAt: null,
+            lineage: {
+              parentThreadId: attached ? parentId : null,
+              relationshipToParent: attached ? "subagent" : null,
+              rootThreadId: parentId,
+              ...(attached ? {} : { detachedFrom: { threadId: parentId } }),
+            },
+          },
+        },
+      } as ApplicationStoredEvent;
+      trackSubagentParent(event, parents);
+      expect(shouldPublishShellApplicationEvent(event, subagents)).toBe(true);
+      expect(parents.has(childId)).toBe(attached);
+      expect(subagents.has(childId)).toBe(attached);
+      expect(
+        shouldPublishShellApplicationEvent(stored(childId, "message.updated"), subagents),
+      ).toBe(!attached);
+      expect(toShellApplicationEvent(event)).toEqual({
+        sequence: 1,
+        event: { threadId: childId },
+        ...(["thread.created", "thread.detached", "thread.reattached"].includes(type)
+          ? { parentThreadId: parentId }
+          : {}),
+      });
+    }
+  });
+
   it("tracks subagents created after the subscription starts", () => {
     const subagents = new Set<string>();
     const created = {
@@ -81,7 +131,16 @@ describe("subagent shell events", () => {
       shouldPublishShellApplicationEvent(stored("new-child", "message.updated"), subagents),
     ).toBe(false);
     expect(
-      shouldPublishShellApplicationEvent(stored("new-child", "thread.deleted"), subagents),
+      shouldPublishShellApplicationEvent(
+        {
+          event: {
+            threadId: "new-child",
+            type: "thread.deleted",
+            payload: { lineage: { relationshipToParent: "subagent" } },
+          },
+        } as ApplicationStoredEvent,
+        subagents,
+      ),
     ).toBe(true);
     expect(subagents.has("new-child")).toBe(true);
   });
@@ -205,7 +264,9 @@ describe("omitIdleSubagentShells", () => {
     expect(omitted.threads.map((thread) => thread.id)).toEqual(["root"]);
     expect(
       shouldPublishShellApplicationEvent(
-        { event: { threadId: "idle", type: "turn-item.updated" } } as ApplicationStoredEvent,
+        {
+          event: { threadId: "idle", type: "turn-item.updated", payload: {} },
+        } as ApplicationStoredEvent,
         omitted.subagentThreadIds,
       ),
     ).toBe(false);
@@ -250,7 +311,12 @@ describe("subagent counts", () => {
         event: {
           threadId,
           type,
-          payload: { lineage: lineage("root"), creationSource: "provider" },
+          payload: {
+            lineage: lineage("root"),
+            creationSource: "provider",
+            archivedAt: type === "thread.archived" ? DateTime.makeUnsafe(0) : null,
+            deletedAt: type === "thread.deleted" ? DateTime.makeUnsafe(0) : null,
+          },
         },
       }) as ApplicationStoredEvent;
     const child = { parentThreadId: "root", origin: "provider_native" };

@@ -1,6 +1,9 @@
 import {
   CommandId,
+  delegatingParentThreadId,
+  taskIdOfRun,
   MessageId,
+  type ThreadId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
@@ -58,6 +61,24 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const pendingChildQuestions = Effect.fn("DelegatedTaskQuestionReactor.pendingChildQuestions")(
+    function* (threadId: ThreadId) {
+      const child = yield* projections.getThreadRecords(threadId, ["runtimeRequests"], {
+        runtimeRequestStatuses: ["pending"],
+      });
+      const requests = child.runtimeRequests.filter(
+        (request) => request.kind === "user_input" && request.responseCapability.type === "live",
+      );
+      const { nodes } = yield* projections.getThreadRecords(threadId, ["nodes"], {
+        nodeIds: requests.map((request) => request.nodeId),
+      });
+      const { runs } = yield* projections.getThreadRecords(threadId, ["runs"], {
+        runIds: nodes.flatMap((node) => (node.runId === null ? [] : [node.runId])),
+      });
+      return { ...child, runtimeRequests: requests, nodes, runs };
+    },
+  );
+
   // Runs for every domain event; most events return before any work is needed.
   const handle: DelegatedTaskQuestionReactor["Service"]["handle"] = Effect.fnUntraced(
     function* (event) {
@@ -65,6 +86,10 @@ const make = Effect.gen(function* () {
         if (!["completed", "failed", "waiting"].includes(event.payload.status)) return;
         const parent = yield* projections.getThreadRecords(event.threadId, ["subagents"]);
         if (parent.thread.archivedAt !== null || parent.thread.deletedAt !== null) return;
+        const children = new Map<
+          ThreadId,
+          Effect.Success<ReturnType<typeof pendingChildQuestions>>
+        >();
         for (const task of parent.subagents) {
           if (
             task.origin !== "app_owned" ||
@@ -76,17 +101,14 @@ const make = Effect.gen(function* () {
           ) {
             continue;
           }
-          const child = yield* projections.getThreadRecords(task.childThreadId, [
-            "runtimeRequests",
-          ]);
+          const child =
+            children.get(task.childThreadId) ?? (yield* pendingChildQuestions(task.childThreadId));
+          children.set(task.childThreadId, child);
+          if (delegatingParentThreadId(child.thread.lineage) !== task.threadId) continue;
           for (const request of child.runtimeRequests) {
-            if (
-              request.kind !== "user_input" ||
-              request.status !== "pending" ||
-              request.responseCapability.type !== "live"
-            ) {
-              continue;
-            }
+            const runId = child.nodes.find((node) => node.id === request.nodeId)?.runId;
+            const run = child.runs.find((run) => run.id === runId);
+            if (taskIdOfRun(child.thread, run ?? {}) !== task.id) continue;
             yield* wakeParent(task, request).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("catching up a delegated task question failed", {
@@ -104,8 +126,8 @@ const make = Effect.gen(function* () {
         return;
       }
       const child = yield* projections.getThread(event.threadId);
-      const parentThreadId = child.lineage.parentThreadId;
-      if (parentThreadId === null) return;
+      const parentThreadId = delegatingParentThreadId(child.lineage);
+      if (parentThreadId === undefined) return;
       const request = yield* projections.getRuntimeRequest(event.threadId, event.payload.id);
       const key = `${parentThreadId}:${event.payload.id}`;
       const messageId = MessageId.make(`message:delegated-task-question:${key}`);
@@ -125,18 +147,28 @@ const make = Effect.gen(function* () {
         return;
       }
       const parent = yield* projections.getThreadRecords(parentThreadId, ["subagents", "runs"]);
-      const { runs } = yield* projections.getThreadRecords(child.id, ["runs"]);
+      const runId =
+        event.runId ??
+        (yield* projections.getThreadRecords(child.id, ["nodes"], {
+          nodeIds: [request.nodeId],
+        })).nodes[0]?.runId;
+      const { runs } = yield* projections.getThreadRecords(
+        child.id,
+        ["runs"],
+        runId == null ? undefined : { runIds: [runId] },
+      );
       const run =
-        runs.find((run) => run.id === event.runId) ??
-        runs.toSorted((a, b) => b.ordinal - a.ordinal)[0];
-      const taskId =
-        run?.delegatedTaskId ??
-        (child.forkedFrom?.type === "node" ? child.forkedFrom.nodeId : undefined);
+        runs.find((run) => run.id === runId) ??
+        (child.lineage.detachedFrom === undefined
+          ? runs.toSorted((a, b) => b.ordinal - a.ordinal)[0]
+          : undefined);
+      const taskId = taskIdOfRun(child, run ?? {});
       const task = parent.subagents.find(
         (candidate) => candidate.origin === "app_owned" && candidate.id === taskId,
       );
       if (
         task === undefined ||
+        task.result !== null ||
         parent.thread.archivedAt !== null ||
         parent.thread.deletedAt !== null
       ) {

@@ -428,21 +428,48 @@ export interface SubagentParent {
   readonly origin: OrchestrationV2SubagentOrigin;
 }
 
-/** The subagent a thread lifecycle event creates, archives, restores or deletes. */
-function subagentLifecycleOf(event: OrchestrationV2StoredEvent["event"]): SubagentParent | null {
+function threadPayloadOf(event: OrchestrationV2StoredEvent["event"]) {
   switch (event.type) {
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":
-    case "thread.deleted": {
-      const { lineage, creationSource } = event.payload;
-      return lineage.relationshipToParent === "subagent" && lineage.parentThreadId !== null
-        ? { parentThreadId: lineage.parentThreadId, origin: subagentOriginOf(creationSource) }
-        : null;
-    }
+    case "thread.deleted":
+    case "thread.settled":
+    case "thread.unsettled":
+    case "thread.snoozed":
+    case "thread.unsnoozed":
+    case "thread.auto-settle-set":
+    case "thread.detached":
+    case "thread.reattached":
+    case "thread.pinned":
+    case "thread.unpinned":
+    case "thread.pin-reordered":
+    case "thread.active-reordered":
+    case "thread.tags-updated":
+    case "thread.visited":
+    case "thread.marked-unread":
+    case "thread.metadata-updated":
+    case "thread.pull-request-synced":
+    case "thread.runtime-mode-updated":
+    case "thread.interaction-mode-updated":
+    case "thread.model-selection-updated":
+    case "thread.provider-switched":
+    case "thread.guest-share-updated":
+      return event.payload;
     default:
-      return null;
+      return undefined;
   }
+}
+
+function subagentLifecycleOf(event: OrchestrationV2StoredEvent["event"]): SubagentParent | null {
+  const thread = threadPayloadOf(event);
+  return thread?.lineage.relationshipToParent === "subagent" &&
+    thread.lineage.parentThreadId !== null
+    ? {
+        parentThreadId: thread.lineage.parentThreadId,
+        origin: subagentOriginOf(thread.creationSource),
+      }
+    : null;
 }
 
 /**
@@ -469,9 +496,10 @@ export function trackSubagentParent(
   parents: Map<string, SubagentParent>,
 ): void {
   if ("aggregateKind" in stored) return;
+  const thread = threadPayloadOf(stored.event);
+  if (thread === undefined) return;
   const subagent = subagentLifecycleOf(stored.event);
-  if (subagent === null) return;
-  if (stored.event.type === "thread.archived" || stored.event.type === "thread.deleted") {
+  if (subagent === null || thread.archivedAt !== null || thread.deletedAt !== null) {
     parents.delete(stored.event.threadId);
   } else {
     parents.set(stored.event.threadId, subagent);
@@ -525,14 +553,13 @@ export function shouldPublishShellApplicationEvent(
 ): boolean {
   if ("aggregateKind" in stored) return true;
   const { event } = stored;
-  if (event.type === "thread.created") {
-    if (event.payload.lineage.relationshipToParent === "subagent") {
+  const thread = threadPayloadOf(event);
+  if (thread !== undefined) {
+    if (thread.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(event.threadId);
+    } else {
+      subagentThreadIds.delete(event.threadId);
     }
-    return true;
-  }
-  if (event.type === "thread.deleted") {
-    // Replay and the live tail overlap; keep known IDs so late events stay filtered.
     return true;
   }
   return !(
@@ -555,10 +582,20 @@ export function toShellApplicationEvent(stored: ApplicationStoredEvent): ShellAp
     };
   }
   const subagent = subagentLifecycleOf(stored.event);
+  const changesParentCount =
+    stored.event.type === "thread.created" ||
+    stored.event.type === "thread.archived" ||
+    stored.event.type === "thread.unarchived" ||
+    stored.event.type === "thread.deleted" ||
+    stored.event.type === "thread.detached" ||
+    stored.event.type === "thread.reattached";
+  const parentThreadId = changesParentCount
+    ? (subagent?.parentThreadId ?? threadPayloadOf(stored.event)?.lineage.detachedFrom?.threadId)
+    : undefined;
   return {
     sequence: stored.sequence,
     event: { threadId: stored.event.threadId },
-    ...(subagent === null ? {} : { parentThreadId: subagent.parentThreadId }),
+    ...(parentThreadId === undefined ? {} : { parentThreadId }),
   };
 }
 

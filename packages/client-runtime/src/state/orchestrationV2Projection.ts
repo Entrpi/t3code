@@ -281,6 +281,8 @@ export function applyOrchestrationV2ProjectionEvent(
     case "thread.snoozed":
     case "thread.unsnoozed":
     case "thread.auto-settle-set":
+    case "thread.detached":
+    case "thread.reattached":
     case "thread.pinned":
     case "thread.unpinned":
     case "thread.pin-reordered":
@@ -300,9 +302,27 @@ export function applyOrchestrationV2ProjectionEvent(
       return { ...projection, thread: event.payload };
     case "run.created":
     case "run.updated": {
-      const next = { ...base, runs: upsertEntity(base.runs, event.payload) };
+      const recordedTaskId = base.runs.find((run) => run.id === event.payload.id)?.delegatedTaskId;
+      const next = {
+        ...base,
+        runs: upsertEntity(base.runs, {
+          ...event.payload,
+          ...(event.payload.delegatedTaskId === undefined && recordedTaskId !== undefined
+            ? { delegatedTaskId: recordedTaskId }
+            : {}),
+        }),
+      };
       return { ...next, visibleTurnItems: activeVisibleTurnItems(next) };
     }
+    case "run.delegated-task-bound":
+      return {
+        ...base,
+        runs: base.runs.map((run) =>
+          run.id === event.payload.runId
+            ? { ...run, delegatedTaskId: event.payload.delegatedTaskId }
+            : run,
+        ),
+      };
     case "run.background-work-cancelled":
       return {
         ...base,

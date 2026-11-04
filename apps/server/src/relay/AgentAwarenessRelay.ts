@@ -83,6 +83,8 @@ function shouldPublishAgentAwarenessEvent(
     return false;
   }
   switch (event.type) {
+    case "thread.detached":
+    case "thread.reattached":
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":
@@ -114,6 +116,7 @@ function shouldPublishAgentAwarenessEvent(
     case "thread.marked-unread":
     case "thread.runtime-mode-updated":
     case "thread.interaction-mode-updated":
+    case "run.delegated-task-bound":
     case "run.background-work-cancelled":
     case "run-attempt.created":
     case "run-attempt.updated":

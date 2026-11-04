@@ -104,6 +104,12 @@ export function deriveThreadRelationshipGraph(input: {
     for (const subagent of input.projection.subagents) {
       if (subagent.childThreadId === null) continue;
       const child = threadsById.get(subagent.childThreadId);
+      if (
+        child !== undefined &&
+        (child.lineage.relationshipToParent !== "subagent" ||
+          child.lineage.parentThreadId !== ownerThreadId)
+      )
+        continue;
       addEdge({
         sourceThreadId: ownerThreadId,
         targetThreadId: subagent.childThreadId,

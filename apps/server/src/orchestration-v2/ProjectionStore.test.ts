@@ -2026,6 +2026,24 @@ it.effect("SQL list older settled threads below a cursor", () =>
       threadIds: [],
       counts: [{ projectId: ProjectId.make("project:b"), count: 1 }],
     });
+    const child = yield* store.getThread(id("child"));
+    yield* store.apply({
+      id: EventId.make("event:older-settled:detach-child"),
+      type: "thread.detached",
+      threadId: child.id,
+      occurredAt: at(10),
+      payload: {
+        ...child,
+        lineage: {
+          ...child.lineage,
+          parentThreadId: null,
+          relationshipToParent: null,
+          detachedFrom: { threadId: id("b") },
+          groupThreadId: child.id,
+        },
+      },
+    });
+    yield* assertShellIndexCoversShells();
   }).pipe(Effect.provide(layerTest)),
 );
 
@@ -2527,7 +2545,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     "keeps restart-cancelled work through a stale run.updated",
     () => restartCancelledWorkSurvivesStaleRunUpdate,
   );
-  it.effect("records restart-cancelled work without regressing a run that completed since", () =>
+  it.effect("records task binding and cancelled work without regressing a completed run", () =>
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;
       const threadId = yield* addRolledBackRecoveryCandidate("restart-cancelled-work");
@@ -2542,6 +2560,17 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         occurredAt: now,
         payload: { ...run, status: "completed", completedAt: now },
       });
+      yield* store.apply({
+        id: EventId.make("event:restart-cancelled-work:bound"),
+        type: "run.delegated-task-bound",
+        threadId,
+        occurredAt: now,
+        payload: { runId: run.id, delegatedTaskId: NodeId.make("task:late-binding") },
+      });
+      assert.equal(
+        (yield* store.getThreadRecords(threadId, ["runs"])).runs[0]?.delegatedTaskId,
+        NodeId.make("task:late-binding"),
+      );
       const work = [{ kind: "subagent" as const, label: "Background subagent test" }];
       yield* store.apply({
         id: EventId.make("event:restart-cancelled-work:recorded"),
@@ -2560,6 +2589,44 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       })).runs;
       assert.equal(recovery?.status, "completed");
       assert.deepEqual(recovery?.restartCancelledBackgroundWork, work);
+    }),
+  );
+  it.effect("does not repair search for new hidden threads or unchanged visibility", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const source = yield* addRolledBackRecoveryCandidate("search-repair-source");
+      const thread = yield* store.getThread(source);
+      const now = yield* DateTime.now;
+      const { statements, tracer } = traceSqlStatements();
+      for (const sideChat of [false, true]) {
+        const id = ThreadId.make(`thread:new-hidden:${sideChat}`);
+        const payload = {
+          ...thread,
+          id,
+          lineage: {
+            ...thread.lineage,
+            parentThreadId: source,
+            relationshipToParent: sideChat ? ("fork" as const) : ("subagent" as const),
+            sideChat,
+          },
+        };
+        for (const type of ["thread.created", "thread.visited"] as const) {
+          yield* store
+            .apply({
+              id: EventId.make(`event:${id}:${type}`),
+              type,
+              threadId: id,
+              occurredAt: now,
+              payload,
+            })
+            .pipe(Effect.withTracer(tracer));
+        }
+      }
+      assert.isFalse(
+        statements.some((sql) =>
+          /(?:DELETE FROM|INSERT INTO) orchestration_v2_message_search/.test(sql),
+        ),
+      );
     }),
   );
   it.effect("record reads select subagents by id", () => subagentRecordsSelectById);

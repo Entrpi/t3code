@@ -78,6 +78,9 @@ export function makeSubagentChildThread(input: {
       parentThreadId: input.parentThread.id,
       relationshipToParent: "subagent",
       rootThreadId: input.parentThread.lineage.rootThreadId,
+      ...(input.parentThread.lineage.groupThreadId === undefined
+        ? {}
+        : { groupThreadId: input.parentThread.lineage.groupThreadId }),
     },
     forkedFrom: {
       type: "node",

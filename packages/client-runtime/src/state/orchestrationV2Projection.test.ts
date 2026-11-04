@@ -5,6 +5,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  EventId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -173,20 +174,23 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     expect(next?.providerTurns[0]?.tokenUsage).toEqual(running.tokenUsage);
   });
 
-  it("applies thread lifecycle payloads instead of leaving stale metadata", () => {
-    const archivedAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
-    const event = {
-      id: "event-archive",
-      type: "thread.archived",
-      threadId,
-      occurredAt: archivedAt,
-      payload: { ...emptyProjection.thread, archivedAt, updatedAt: archivedAt },
-    } as OrchestrationV2DomainEvent;
+  it.each(["thread.archived", "thread.detached", "thread.reattached"] as const)(
+    "applies %s payloads instead of leaving stale metadata",
+    (type) => {
+      const archivedAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
+      const event = {
+        id: "event-archive",
+        type,
+        threadId,
+        occurredAt: archivedAt,
+        payload: { ...emptyProjection.thread, archivedAt, updatedAt: archivedAt },
+      } as OrchestrationV2DomainEvent;
 
-    const next = applyOrchestrationV2ProjectionEvent(emptyProjection, event);
-    expect(next?.thread.archivedAt).toEqual(archivedAt);
-    expect(next?.updatedAt).toEqual(archivedAt);
-  });
+      const next = applyOrchestrationV2ProjectionEvent(emptyProjection, event);
+      expect(next?.thread.archivedAt).toEqual(archivedAt);
+      expect(next?.updatedAt).toEqual(archivedAt);
+    },
+  );
 
   it("preserves visible row identity when run updates do not change membership", () => {
     const item = commandItem("item-stable");
@@ -201,7 +205,7 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     ];
     const projection = {
       ...emptyProjection,
-      runs: [run],
+      runs: [{ ...run, delegatedTaskId: NodeId.make("task:retained-binding") }],
       turnItems: [item],
       visibleTurnItems,
     };
@@ -215,8 +219,18 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     } as OrchestrationV2DomainEvent;
 
     const next = applyOrchestrationV2ProjectionEvent(projection, event);
+    expect(next?.runs[0]?.delegatedTaskId).toBe(NodeId.make("task:retained-binding"));
     expect(next?.visibleTurnItems).toBe(visibleTurnItems);
     expect(next?.visibleTurnItems[0]).toBe(visibleTurnItems[0]);
+    const bound = applyOrchestrationV2ProjectionEvent(next ?? projection, {
+      id: EventId.make("event:late-task-binding"),
+      type: "run.delegated-task-bound",
+      threadId,
+      occurredAt: now,
+      payload: { runId, delegatedTaskId: NodeId.make("task:late-binding") },
+    });
+    expect(bound?.runs[0]?.status).toBe("completed");
+    expect(bound?.runs[0]?.delegatedTaskId).toBe(NodeId.make("task:late-binding"));
   });
 
   it("replaces only the updated visible item and retains its deferred work cursor", () => {

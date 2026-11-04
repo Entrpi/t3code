@@ -373,6 +373,13 @@ export interface ThreadManagementServiceShape {
     Orchestrator.OrchestratorV2DispatchResult,
     Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
   >;
+  readonly detachThread: (
+    input: Omit<Extract<OrchestrationV2Command, { readonly type: "thread.detach" }>, "type">,
+  ) => ReturnType<ThreadManagementServiceShape["dispatch"]>;
+  readonly reattachThread: (
+    input: Omit<Extract<OrchestrationV2Command, { readonly type: "thread.reattach" }>, "type">,
+  ) => ReturnType<ThreadManagementServiceShape["dispatch"]>;
+  readonly stopDelegatedChild: Orchestrator.OrchestratorV2["Service"]["stopDelegatedChild"];
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
@@ -482,6 +489,7 @@ export interface ThreadManagementServiceShape {
   >;
   readonly stopDelegatedTasks: (input: {
     readonly threadId: ThreadId;
+    readonly runIds?: ReadonlyArray<RunId>;
     readonly commandId: CommandId;
     readonly reason?: string | undefined;
   }) => Effect.Effect<
@@ -754,6 +762,21 @@ const make = Effect.gen(function* () {
       Effect.andThen(assertDispatchTargetEnabled(command)),
       Effect.andThen(orchestrator.dispatch(command)),
     );
+
+  const detachThread: ThreadManagementServiceShape["detachThread"] = Effect.fn(
+    "ThreadManagementService.detachThread",
+  )((input) => dispatch({ ...input, type: "thread.detach" }));
+  const reattachThread: ThreadManagementServiceShape["reattachThread"] = Effect.fn(
+    "ThreadManagementService.reattachThread",
+  )((input) => dispatch({ ...input, type: "thread.reattach" }));
+  const stopDelegatedChild: ThreadManagementServiceShape["stopDelegatedChild"] = Effect.fn(
+    "ThreadManagementService.stopDelegatedChild",
+  )((input) =>
+    ensureProjectionTranscript(input.parentThreadId).pipe(
+      Effect.andThen(ensureProjectionTranscript(input.threadId)),
+      Effect.andThen(orchestrator.stopDelegatedChild(input)),
+    ),
+  );
 
   const getProjectThreadRecords: ThreadManagementServiceShape["getProjectThreadRecords"] = (
     input,
@@ -1396,7 +1419,11 @@ const make = Effect.gen(function* () {
   const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = Effect.fn(
     "ThreadManagementService.stopDelegatedTasks",
   )(function* (input) {
-    const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, ["subagents"]);
+    const { subagents } = yield* orchestrator.getThreadRecords(
+      input.threadId,
+      ["subagents"],
+      input.runIds === undefined ? undefined : { subagentRunIds: input.runIds },
+    );
     const failures: Array<
       Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
     > = [];
@@ -1442,14 +1469,22 @@ const make = Effect.gen(function* () {
       // Follow-up tasks reuse a child thread; walk its subtree only once.
       if (stoppedChildThreadIds.has(threadId)) continue;
       stoppedChildThreadIds.add(threadId);
-      yield* dispatch({
-        type: "thread.stop",
+      yield* stopDelegatedChild({
+        parentThreadId: input.threadId,
         commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
         threadId,
-        stopDelegatedTasks: false,
         ...(input.reason === undefined ? {} : { reason: input.reason }),
       }).pipe(
-        Effect.andThen(stopDelegatedTasks({ ...input, threadId })),
+        Effect.flatMap((scope) =>
+          scope === false
+            ? Effect.void
+            : stopDelegatedTasks({
+                threadId,
+                commandId: input.commandId,
+                ...(input.reason === undefined ? {} : { reason: input.reason }),
+                ...(scope === true ? {} : { runIds: scope.runIds }),
+              }),
+        ),
         Effect.catch((error) =>
           Effect.logWarning("Unable to stop a delegated task", {
             parentThreadId: input.threadId,
@@ -1463,6 +1498,9 @@ const make = Effect.gen(function* () {
   });
 
   return ThreadManagementService.of({
+    detachThread,
+    reattachThread,
+    stopDelegatedChild,
     ensureLegacyTranscript,
     searchThreadStream: (input) =>
       Stream.unwrap(

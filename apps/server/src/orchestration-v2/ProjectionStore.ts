@@ -48,6 +48,7 @@ import type {
   RunAttemptId,
 } from "@t3tools/contracts";
 import {
+  isListedThreadLineage,
   IDLE_COMPACTION_TEXT,
   idleCompactionOf,
   OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
@@ -95,6 +96,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as Statement from "effect/sql/Statement";
 
+import { indexedMessageCondition, indexedMessageText } from "./messageSearchIndex.ts";
 import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
 import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import {
@@ -353,6 +355,8 @@ export interface ProjectionRecordFilter {
   readonly runtimeRequestStatuses?: ReadonlyArray<OrchestrationV2RuntimeRequest["status"]>;
   readonly contextTransferStatuses?: ReadonlyArray<OrchestrationV2ContextTransfer["status"]>;
   readonly subagentIds?: ReadonlyArray<NodeId>;
+  readonly subagentChildThreadId?: ThreadId;
+  readonly subagentResultPending?: true;
   readonly subagentRunIds?: ReadonlyArray<RunId>;
   readonly nodeIds?: ReadonlyArray<NodeId>;
   readonly turnItemTypes?: ReadonlyArray<OrchestrationV2TurnItem["type"]>;
@@ -771,6 +775,9 @@ function preserveRunRecordedFields(
   if (current === undefined) return next;
   return {
     ...next,
+    ...(next.delegatedTaskId === undefined && current.delegatedTaskId !== undefined
+      ? { delegatedTaskId: current.delegatedTaskId }
+      : {}),
     ...(next.delegatedCompletion === undefined && current.delegatedCompletion !== undefined
       ? { delegatedCompletion: current.delegatedCompletion }
       : {}),
@@ -853,6 +860,8 @@ export function applyToProjection(
     case "thread.snoozed":
     case "thread.unsnoozed":
     case "thread.auto-settle-set":
+    case "thread.detached":
+    case "thread.reattached":
     case "thread.pinned":
     case "thread.unpinned":
     case "thread.pin-reordered":
@@ -893,6 +902,15 @@ export function applyToProjection(
           ),
         ),
       });
+    case "run.delegated-task-bound":
+      return {
+        ...base,
+        runs: base.runs.map((run) =>
+          run.id === event.payload.runId
+            ? { ...run, delegatedTaskId: event.payload.delegatedTaskId }
+            : run,
+        ),
+      };
     case "run.background-work-cancelled":
       return {
         ...base,
@@ -2008,6 +2026,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       OR item.payload_json LIKE '%"viewedImagePath"%'
       OR item.payload_json LIKE '%"toolName":"%delegate_task"%')`;
 
+    const hasMessageSearchIndex =
+      (yield* sql`
+      SELECT 1 FROM sqlite_master WHERE name = 'orchestration_v2_message_search'
+    `.pipe(Effect.orDie)).length > 0;
+
     const keepRecordedRunField = (payload: Statement.Fragment, path: string) => sql`
       CASE
         WHEN json_type(excluded.payload_json, ${path}) IS NULL
@@ -2044,6 +2067,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             case "thread.snoozed":
             case "thread.unsnoozed":
             case "thread.auto-settle-set":
+            case "thread.detached":
+            case "thread.reattached":
             case "thread.pinned":
             case "thread.unpinned":
             case "thread.pin-reordered":
@@ -2058,6 +2083,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             case "thread.model-selection-updated":
             case "thread.provider-switched":
             case "thread.guest-share-updated": {
+              const visibilityChanges = hasMessageSearchIndex
+                ? yield* sql`
+                SELECT 1 FROM orchestration_v2_projection_threads
+                WHERE thread_id = ${event.threadId} AND (
+                  json_extract(payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
+                  AND json_extract(payload_json, '$.lineage.sideChat') IS NOT 1
+                ) IS NOT ${isListedThreadLineage(event.payload.lineage) ? 1 : 0}
+              `
+                : [];
               const payloadJson = yield* encodeThreadPayload(event.payload);
               const payload = parseEncodedPayload(payloadJson);
               yield* sql`
@@ -2106,6 +2140,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 deleted_at = excluded.deleted_at,
                 payload_json = excluded.payload_json
             `;
+              if (visibilityChanges.length > 0) {
+                yield* sql`
+                  DELETE FROM orchestration_v2_message_search WHERE rowid IN (
+                    SELECT rowid FROM orchestration_v2_projection_messages WHERE thread_id = ${event.threadId}
+                  )
+                `;
+                yield* sql`
+                  INSERT INTO orchestration_v2_message_search (rowid, text)
+                  SELECT messages.rowid, ${indexedMessageText(sql, "messages.payload_json")}
+                  FROM orchestration_v2_projection_messages AS messages
+                  WHERE messages.thread_id = ${event.threadId}
+                    AND ${indexedMessageCondition(sql)}
+                    AND json_extract(messages.payload_json, '$.text') IS NOT NULL
+                `;
+              }
               break;
             }
             case "run.created":
@@ -2148,10 +2197,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 requested_at = excluded.requested_at,
                 completed_at = excluded.completed_at,
                 payload_json = ${keepRecordedRunField(
-                  keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedCompletion"),
+                  keepRecordedRunField(
+                    keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedTaskId"),
+                    "$.delegatedCompletion",
+                  ),
                   "$.restartCancelledBackgroundWork",
                 )}
             `;
+              break;
+            }
+            case "run.delegated-task-bound": {
+              yield* sql`
+                UPDATE orchestration_v2_projection_runs
+                SET payload_json = json_set(payload_json, '$.delegatedTaskId', ${event.payload.delegatedTaskId})
+                WHERE run_id = ${event.payload.runId} AND thread_id = ${event.threadId}
+              `;
               break;
             }
             case "run.background-work-cancelled": {
@@ -2858,6 +2918,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.snoozed" &&
             event.type !== "thread.unsnoozed" &&
             event.type !== "thread.auto-settle-set" &&
+            event.type !== "thread.detached" &&
+            event.type !== "thread.reattached" &&
             event.type !== "thread.pinned" &&
             event.type !== "thread.unpinned" &&
             event.type !== "thread.pin-reordered" &&
@@ -3468,6 +3530,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE thread_id = ${threadId}
               ${filter?.subagentIds === undefined ? sql`` : sql`AND subagent_id IN (SELECT value FROM json_each(${encodeIdList(filter.subagentIds)}))`}
               ${filter?.subagentRunIds === undefined ? sql`` : sql`AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.subagentRunIds)}))`}
+              ${filter?.subagentChildThreadId === undefined ? sql`` : sql`AND child_thread_id = ${filter.subagentChildThreadId}`}
+              ${filter?.subagentResultPending === true ? sql`AND json_extract(payload_json, '$.result') IS NULL` : sql``}
               ${
                 filter?.omitSettledSubagents !== undefined
                   ? sql`AND (${
@@ -4175,8 +4239,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               return sql`
                 SELECT child.thread_id FROM orchestration_v2_projection_threads AS child
                 WHERE CASE WHEN json_valid(child.payload_json) THEN
-                  json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-                  AND json_extract(child.payload_json, '$.lineage.parentThreadId') IS NOT NULL
+                  COALESCE(
+                    CASE WHEN json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                      THEN json_extract(child.payload_json, '$.lineage.parentThreadId') END,
+                    json_extract(child.payload_json, '$.lineage.detachedFrom.threadId')
+                  ) IS NOT NULL
                   AND json_extract(child.payload_json, '$.forkedFrom.type') = 'node'
                   ELSE 0 END
                   AND (EXISTS (
@@ -4189,8 +4256,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       AND json_extract(task.payload_json, '$.origin') = 'app_owned'
                       AND json_extract(task.payload_json, '$.result') IS NULL
                   ) OR (
-                    -- The original task still waits for the latest unheld work.
-                    (SELECT status FROM orchestration_v2_projection_runs
+                    -- Detached original tasks are bound to runs in the first branch.
+                    json_type(child.payload_json, '$.lineage.detachedFrom') IS NULL
+                    AND (SELECT status FROM orchestration_v2_projection_runs
                      WHERE thread_id = child.thread_id
                        AND NOT (status = 'queued' AND json_extract(payload_json, '$.queueHeld') IS 1)
                      ORDER BY ordinal DESC LIMIT 1
@@ -5523,8 +5591,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       threadId,
     ) =>
       sql<{ readonly child_thread_id: string }>`SELECT child_thread_id
-        FROM orchestration_v2_projection_subagents
+        FROM orchestration_v2_projection_subagents AS task
         WHERE thread_id = ${threadId} AND origin = 'app_owned' AND child_thread_id IS NOT NULL
+          AND (NOT EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_threads AS child
+            WHERE child.thread_id = task.child_thread_id
+          ) OR EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_threads AS child
+            WHERE child.thread_id = task.child_thread_id
+              AND (
+                (json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                  AND json_extract(child.payload_json, '$.lineage.parentThreadId') = ${threadId})
+                OR (json_extract(child.payload_json, '$.lineage.detachedFrom.threadId') = ${threadId}
+                  AND json_extract(task.payload_json, '$.result') IS NULL)
+              )
+          ))
         ORDER BY COALESCE(started_at, ''), subagent_id ASC`.pipe(
         Effect.map((rows) => [...new Set(rows.map((row) => ThreadId.make(row.child_thread_id)))]),
         Effect.mapError(controlReadError(threadId)),
@@ -7210,6 +7291,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly relationship_to_parent: string | null;
         readonly parent_thread_id: string | null;
         readonly root_thread_id: string;
+        readonly detached_from_thread_id: string | null;
+        readonly group_thread_id: string | null;
         readonly side_chat: number | null;
         readonly creation_source: OrchestrationV2ThreadShell["creationSource"];
         readonly settled_override: string | null;
@@ -7224,6 +7307,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           json_extract(t.payload_json, '$.lineage.relationshipToParent') AS relationship_to_parent,
           json_extract(t.payload_json, '$.lineage.parentThreadId') AS parent_thread_id,
           json_extract(t.payload_json, '$.lineage.rootThreadId') AS root_thread_id,
+          json_extract(t.payload_json, '$.lineage.detachedFrom.threadId') AS detached_from_thread_id,
+          json_extract(t.payload_json, '$.lineage.groupThreadId') AS group_thread_id,
           json_extract(t.payload_json, '$.lineage.sideChat') AS side_chat,
           json_extract(t.payload_json, '$.creationSource') AS creation_source,
           json_extract(t.payload_json, '$.settledOverride') AS settled_override,
@@ -7280,6 +7365,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ? row.relationship_to_parent
               : null,
           rootThreadId: ThreadId.make(row.root_thread_id),
+          ...(row.detached_from_thread_id === null
+            ? {}
+            : { detachedFrom: { threadId: ThreadId.make(row.detached_from_thread_id) } }),
+          ...(row.group_thread_id === null
+            ? {}
+            : { groupThreadId: ThreadId.make(row.group_thread_id) }),
           ...(row.side_chat === null ? {} : { sideChat: row.side_chat === 1 }),
         },
         creationSource: row.creation_source,

@@ -1,4 +1,4 @@
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
@@ -1135,7 +1135,20 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
         (message) => message.notification !== undefined,
       ),
     );
-    yield* reactor.handle(asyncQuestion);
+    {
+      using reads = vi.spyOn(projections, "getThreadRecords");
+      yield* reactor.handle(asyncQuestion);
+      assert.isFalse(
+        reads.mock.calls.some(
+          ([id, fields]) => id === task.childThreadId && fields.includes("nodes"),
+        ),
+      );
+      assert.isTrue(
+        reads.mock.calls
+          .filter(([id, fields]) => id === task.childThreadId && fields.includes("runs"))
+          .every(([, , filter]) => filter?.runIds?.includes(childRun.id)),
+      );
+    }
     assert.equal(
       (yield* projections.getThreadProjection(parentThreadId)).messages.filter(
         (message) => message.notification !== undefined,
@@ -1216,6 +1229,7 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       2,
     );
     yield* eventSink.write({ events: [parentCompleted] });
+    using questionReads = vi.spyOn(projections, "getThreadRecords");
     for (const state of ["disposed", "pending"] as const) {
       yield* eventSink.write({
         events: [
@@ -1237,6 +1251,12 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       }
     }
     yield* reactor.handle(parentCompleted);
+    assert.isTrue(
+      questionReads.mock.calls
+        .filter(([id, fields]) => id === task.childThreadId && fields.includes("nodes"))
+        .every(([, , filter]) => filter?.nodeIds !== undefined),
+    );
+    questionReads.mockRestore();
     const caughtUp = (yield* projections.getThreadProjection(parentThreadId)).messages.filter(
       (message) => message.notification !== undefined,
     );
@@ -1373,6 +1393,85 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       taskIds: [followup.delegatedTaskId],
       childThreadId: task.childThreadId!,
     });
+    yield* orchestrator.dispatch({
+      type: "thread.detach",
+      commandId: CommandId.make("detach-question-child"),
+      threadId: task.childThreadId!,
+      grouped: true,
+    });
+    const detachedBoundQuestion = requestEvent(
+      "event:detached-bound-question",
+      "request:detached-bound-question",
+      "message",
+      "user_input",
+      followup,
+    );
+    yield* eventSink.write({ events: [detachedBoundQuestion] });
+    yield* reactor.handle(detachedBoundQuestion);
+    assert.isTrue(
+      (yield* projections.getThreadRecords(parentThreadId, ["messages"])).messages.some((message) =>
+        message.text.includes("request:detached-bound-question"),
+      ),
+    );
+    const beforeIndependent = (yield* projections.getThreadRecords(parentThreadId, ["messages"]))
+      .messages;
+    const independentRun = {
+      ...followup,
+      id: RunId.make("run:detached-question"),
+      ordinal: followup.ordinal + 1,
+      rootNodeId: NodeId.make("node:detached-question"),
+      delegatedTaskId: undefined,
+    };
+    const followupChild = yield* projections.getThreadProjection(task.childThreadId!);
+    const followupTask = (yield* projections.getThreadRecords(parentThreadId, [
+      "subagents",
+    ])).subagents.find((task) => task.id === followup.delegatedTaskId)!;
+    yield* projections.apply({
+      id: EventId.make("event:detached-question-task"),
+      type: "subagent.updated",
+      threadId: parentThreadId,
+      occurredAt: now,
+      payload: { ...followupTask, runId: parentRun.id, completionWake: "settled_only" },
+    });
+    yield* projections.apply({
+      id: EventId.make("event:detached-question-node"),
+      type: "node.updated",
+      threadId: task.childThreadId!,
+      occurredAt: now,
+      payload: {
+        ...followupChild.nodes.find((node) => node.id === followup.rootNodeId)!,
+        id: independentRun.rootNodeId,
+        runId: independentRun.id,
+      },
+    });
+    const independentQuestion = requestEvent(
+      "event:detached-question",
+      "request:detached-question",
+      "live",
+      "user_input",
+      independentRun,
+    );
+    yield* eventSink.write({
+      events: [
+        {
+          id: EventId.make("event:detached-question-run"),
+          type: "run.updated",
+          threadId: task.childThreadId!,
+          occurredAt: now,
+          payload: independentRun,
+        },
+        independentQuestion,
+      ],
+    });
+    yield* reactor.handle(independentQuestion);
+    yield* reactor.handle({
+      ...parentCompleted,
+      id: EventId.make("event:detached-question-catch-up"),
+    });
+    assert.deepEqual(
+      (yield* projections.getThreadRecords(parentThreadId, ["messages"])).messages,
+      beforeIndependent,
+    );
   }).pipe(Effect.provide(DelegatedTaskQuestionReactor.layer.pipe(Layer.provideMerge(layerTest)))),
 );
 

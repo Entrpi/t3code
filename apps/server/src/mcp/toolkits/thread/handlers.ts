@@ -341,6 +341,19 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           .settleThread({ ...common, byOwnAgent: caller?.id === projection.thread.id })
           .pipe(Effect.mapError(dispatchFailure));
       }
+      if (input.action === "detach" || input.action === "reattach") {
+        if (caller?.id === projection.thread.id)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "An agent cannot detach or reattach its own thread.",
+          });
+        const result = yield* (
+          input.action === "detach"
+            ? threads.detachThread({ ...common, grouped: input.grouped ?? true })
+            : threads.reattachThread(common)
+        ).pipe(Effect.mapError(dispatchFailure));
+        return { sequence: result.sequence };
+      }
       let command: OrchestrationV2Command;
       switch (input.action) {
         case "snooze":
