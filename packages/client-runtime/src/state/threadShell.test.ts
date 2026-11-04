@@ -97,17 +97,24 @@ describe("v2 thread shell lists", () => {
       id: ThreadId.make("fork"),
       lineage: { ...child.lineage, relationshipToParent: "fork" as const },
     };
-    const snapshot = { ...v2ShellSnapshot, threads: [root, child, fork] };
+    // A settled subsession leaves its parent for the Settled section.
+    const settled = {
+      ...child,
+      id: ThreadId.make("settled-subsession"),
+      creationSource: "mcp" as const,
+      settledOverride: "settled" as const,
+    };
+    const snapshot = { ...v2ShellSnapshot, threads: [root, child, fork, settled] };
     registry.set(snapshotAtom(environmentId), snapshot);
     const dispose = registry.mount(threads.navigationThreadShellsAtom);
     const before = registry.get(threads.navigationThreadShellsAtom);
-    expect(before.map((thread) => thread.id)).toEqual([root.id, fork.id]);
+    expect(before.map((thread) => thread.id)).toEqual([root.id, fork.id, settled.id]);
     registry.set(snapshotAtom(environmentId), {
       ...snapshot,
-      threads: [root, { ...child, title: "Child streaming" }, fork],
+      threads: [root, { ...child, title: "Child streaming" }, fork, settled],
     });
     expect(registry.get(threads.navigationThreadShellsAtom)).toBe(before);
-    expect(registry.get(threads.threadShellsAtom)).toHaveLength(3);
+    expect(registry.get(threads.threadShellsAtom)).toHaveLength(4);
     dispose();
     registry.dispose();
   });

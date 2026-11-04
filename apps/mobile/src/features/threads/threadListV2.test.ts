@@ -60,6 +60,20 @@ function makeThread(
 
 const NOW = "2026-06-02T00:00:00.000Z";
 
+function makeSubsession(
+  id: string,
+  overrides: Partial<EnvironmentThreadShell>,
+): EnvironmentThreadShell {
+  const parentThreadId = ThreadId.make("parent");
+  const raw = makeRawThreadShell({
+    id: ThreadId.make(id),
+    title: id,
+    lineage: { rootThreadId: parentThreadId, parentThreadId, relationshipToParent: "subagent" },
+    creationSource: "mcp",
+  });
+  return { ...presentThreadShell(environmentId, raw), ...overrides };
+}
+
 describe("resolveThreadListV2SnoozeMenuSelection", () => {
   it("recomputes the environment's presets instead of using old timestamps", () => {
     const presets = [{ kind: "after", minutes: 360 }] as const;
@@ -503,6 +517,9 @@ describe("buildThreadListV2Items", () => {
           settledOverride: "settled",
           settledAt: NOW,
         }),
+        // A subsession lists under its parent while open, and with settled threads once settled.
+        makeSubsession("open-subsession", {}),
+        makeSubsession("settled-subsession", { settledOverride: "settled", settledAt: NOW }),
       ],
       environmentId: null,
       searchQuery: "",
@@ -513,9 +530,10 @@ describe("buildThreadListV2Items", () => {
       ["active", "card"],
       ["settled", "slim"],
       ["settled-2", "slim"],
+      ["settled-subsession", "slim"],
     ]);
-    expect(layout.items.map((item) => item.isLast)).toEqual([false, false, true]);
-    expect(layout.settledCount).toBe(2);
+    expect(layout.items.map((item) => item.isLast)).toEqual([false, false, false, true]);
+    expect(layout.settledCount).toBe(3);
     expect(layout.settledShelfHeaderIndex).toBe(1);
   });
 

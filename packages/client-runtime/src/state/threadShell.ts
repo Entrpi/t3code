@@ -9,6 +9,7 @@ import type {
 import {
   isListedThreadLineage,
   isProviderNativeSubagentThread,
+  isSubsessionThread,
   OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -714,7 +715,13 @@ export function createEnvironmentThreadShellAtoms(input: {
       for (const thread of get(environmentThreadsAtom(environmentId))) {
         if (
           thread.archivedAt !== null ||
-          isShownUnderParent({ environmentId, threadId: thread.id }, thread.lineage, underParent) ||
+          (isShownUnderParent(
+            { environmentId, threadId: thread.id },
+            thread.lineage,
+            underParent,
+          ) &&
+            // Settled subsessions are listed with settled threads, like the web sidebar.
+            !(thread.settledOverride === "settled" && isSubsessionThread(thread))) ||
           hidden.has(threadKey({ environmentId, threadId: thread.id }))
         ) {
           continue;
