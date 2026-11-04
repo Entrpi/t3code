@@ -63,6 +63,8 @@ import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import { canTurnThreadIntoProject, turnThreadIntoProject } from "./turnThreadIntoProject";
+import { isSubsessionAction, organizeSubsession, subsessionMenuActions } from "./subsessionActions";
+import { threadSubsessionState } from "@t3tools/client-runtime/state/subsessions";
 import { threadCanArchive } from "../home/threadArchive";
 import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
@@ -909,6 +911,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ],
     [canTurnIntoProject, props.titleRegenerationSupported, thread.runtime, isRegeneratingTitle],
   );
+  const subsessionMenuItems = useMemo(
+    () => subsessionMenuActions(threadSubsessionState(thread.source)),
+    [thread.source],
+  );
   const menuActions = useMemo<MenuAction[]>(() => {
     const nested = Platform.OS === "ios";
     const direct: MenuAction[] = [
@@ -932,6 +938,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         pin: [],
         secondary: [
           ...titleMenuItems,
+          ...subsessionMenuItems,
           ...autoSettleMenuItems,
           LEGACY_MENU_ACTIONS[0]!,
           SNOOZED_MENU_ACTIONS[1]!,
@@ -944,7 +951,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         direct: [...direct, LEGACY_MENU_ACTIONS[0]!],
         reorder: reorderMenuItems,
         pin: pinMenuItems,
-        secondary: [...titleMenuItems, LEGACY_MENU_ACTIONS[1]!],
+        secondary: [...titleMenuItems, ...subsessionMenuItems, LEGACY_MENU_ACTIONS[1]!],
       });
     }
     if (canUnsettle) {
@@ -957,6 +964,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         pin: pinMenuItems,
         secondary: [
           ...titleMenuItems,
+          ...subsessionMenuItems,
           ...autoSettleMenuItems,
           LEGACY_MENU_ACTIONS[0]!,
           SLIM_MENU_ACTIONS[1]!,
@@ -976,6 +984,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       pin: pinMenuItems,
       secondary: [
         ...titleMenuItems,
+        ...subsessionMenuItems,
         ...autoSettleMenuItems,
         LEGACY_MENU_ACTIONS[0]!,
         CARD_MENU_ACTIONS[1]!,
@@ -989,6 +998,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     reorderMenuItems,
     snoozePresetActions,
     snoozedRow,
+    subsessionMenuItems,
     swipeActions.secondary,
     thread.branch,
     titleMenuItems,
@@ -1010,6 +1020,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "turn-into-project") void turnThreadIntoProject(thread);
+      if (isSubsessionAction(nativeEvent.event)) void organizeSubsession(thread, nativeEvent.event);
       if (nativeEvent.event === "copy-thread") {
         const target = threadChipCopyTarget(
           { environmentId: thread.environmentId, threadId: thread.id },
