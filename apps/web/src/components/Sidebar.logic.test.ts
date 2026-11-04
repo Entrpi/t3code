@@ -1664,10 +1664,18 @@ describe("groupSidebarThreadsByProject", () => {
 describe("clusterSidebarThreadsByLineage", () => {
   it("pulls forks to their most recent member, newest first, and links groups of two or more", () => {
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
-    const thread = (id: string, root: string, environmentId = localEnvironmentId) => ({
+    const thread = (
+      id: string,
+      root: string,
+      environmentId = localEnvironmentId,
+      group?: string,
+    ) => ({
       id,
       environmentId,
-      lineage: { rootThreadId: ThreadId.make(root) },
+      lineage: {
+        rootThreadId: ThreadId.make(root),
+        ...(group === undefined ? {} : { groupThreadId: ThreadId.make(group) }),
+      },
     });
     // Newest first, as folders sort by the latest send.
     const threads = [
@@ -1675,7 +1683,9 @@ describe("clusterSidebarThreadsByLineage", () => {
       thread("solo", "solo"),
       thread("root", "root"),
       thread("other-machine", "root", remoteEnvironmentId),
+      thread("separated", "root", localEnvironmentId, "separated"),
       thread("fork-1", "root"),
+      thread("separated-fork", "root", localEnvironmentId, "separated"),
     ];
 
     const { threads: clustered, links } = clusterSidebarThreadsByLineage(threads);
@@ -1687,6 +1697,9 @@ describe("clusterSidebarThreadsByLineage", () => {
       ["solo", null],
       // A root id names a thread on one environment only.
       ["other-machine", null],
+      // A subsession detached apart from its parent leads its own group.
+      ["separated", "first"],
+      ["separated-fork", "last"],
     ]);
   });
 });

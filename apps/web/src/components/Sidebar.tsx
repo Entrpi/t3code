@@ -186,6 +186,7 @@ import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
   threadActionRequiresOperate,
+  threadSubsessionState,
 } from "./threadActionMenu.logic";
 import {
   applySidebarThreadDrop,
@@ -983,6 +984,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     reorderPinnedThread,
     reorderActiveThread,
     markThreadUnread,
+    detachThread,
+    reattachThread,
     archiveThread,
     deleteThread,
   } = useThreadActions();
@@ -2760,6 +2763,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+              subsession: threadSubsessionState(thread.source),
               supports: {
                 settlement: configLoaded,
                 autoSettleOptOut: supportsAutoSettleOptOut,
@@ -2905,6 +2909,31 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           case "mark-unread":
             markThreadUnread(threadRef);
             return;
+          case "detach":
+          case "reattach":
+          case "group-with-parent":
+          case "separate-from-parent": {
+            const action = clicked.value;
+            const result =
+              action === "reattach"
+                ? await reattachThread(threadRef)
+                : await detachThread(
+                    threadRef,
+                    action === "detach" ? undefined : action === "group-with-parent",
+                  );
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title:
+                    action === "reattach" ? "Failed to reattach thread" : "Failed to detach thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "copy-path":
             if (!threadWorkspacePath) {
               toastManager.add(

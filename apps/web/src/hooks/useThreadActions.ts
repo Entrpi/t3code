@@ -199,6 +199,24 @@ export async function navigateAfterThreadDeletion(navigate: () => Promise<void>)
   }
 }
 
+/** Detaches a subsession, grouped by the setting unless told; repeated, it changes grouping. */
+export function useDetachThread() {
+  const detachThreadMutation = useOrchestrationCommand(threadEnvironment.detach, {
+    reportFailure: false,
+  });
+  const detachedSubsessionGrouping = useClientSettings(
+    (settings) => settings.detachedSubsessionGrouping,
+  );
+  return (target: ScopedThreadRef, grouped?: boolean) =>
+    detachThreadMutation({
+      environmentId: target.environmentId,
+      input: {
+        threadId: target.threadId,
+        grouped: grouped ?? detachedSubsessionGrouping === "grouped",
+      },
+    });
+}
+
 function useMarkThreadUnread() {
   const markThreadUnreadMutation = useAtomCommand(threadEnvironment.markUnread, {
     reportFailure: false,
@@ -311,6 +329,10 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const markThreadUnread = useMarkThreadUnread();
+  const detachThread = useDetachThread();
+  const reattachThreadMutation = useOrchestrationCommand(threadEnvironment.reattach, {
+    reportFailure: false,
+  });
   const createProjectFromThread = useAtomCommand(projectEnvironment.createFromThread, {
     reportFailure: false,
   });
@@ -687,6 +709,12 @@ export function useThreadActions() {
     });
   };
 
+  const reattachThread = (target: ScopedThreadRef) =>
+    reattachThreadMutation({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId },
+    });
+
   const pinThread = async (target: ScopedThreadRef, opts: { orderKey?: string } = {}) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
@@ -964,6 +992,8 @@ export function useThreadActions() {
     reorderPinnedThread,
     reorderActiveThread,
     markThreadUnread,
+    detachThread,
+    reattachThread,
     setThreadAutoSettle,
     turnThreadIntoProject: (target: ScopedThreadRef) =>
       createProjectFromThread({

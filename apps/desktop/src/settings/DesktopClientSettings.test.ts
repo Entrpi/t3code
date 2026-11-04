@@ -72,6 +72,7 @@ const clientSettings: ClientSettings = {
   sidebarKeepForksTogether: false,
   sidebarSubagents: "hidden",
   sidebarSubsessions: "hidden",
+  detachedSubsessionGrouping: "grouped",
   loadBalancingEnabled: false,
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
   pullRequestMergeMethodOverrides: {},

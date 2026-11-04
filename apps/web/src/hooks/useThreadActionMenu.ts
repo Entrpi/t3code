@@ -18,6 +18,7 @@ import { useRouter } from "@tanstack/react-router";
 import { pickSnoozePreset, resolveSnoozePresets } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
+  threadSubsessionState,
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
@@ -86,6 +87,8 @@ export function useThreadActionMenu(input: {
     archiveThread,
     deleteThread,
     markThreadUnread,
+    detachThread,
+    reattachThread,
     turnThreadIntoProject,
   } = useThreadActions();
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
@@ -149,6 +152,7 @@ export function useThreadActionMenu(input: {
         snoozePresets,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+        subsession: threadSubsessionState(thread.source),
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -258,6 +262,18 @@ export function useThreadActionMenu(input: {
           return;
         case "mark-unread":
           markThreadUnread(threadRef);
+          return;
+        case "detach":
+          await reportFailure("Failed to detach thread", () => detachThread(threadRef));
+          return;
+        case "reattach":
+          await reportFailure("Failed to reattach thread", () => reattachThread(threadRef));
+          return;
+        case "group-with-parent":
+        case "separate-from-parent":
+          await reportFailure("Failed to change thread grouping", () =>
+            detachThread(threadRef, action === "group-with-parent"),
+          );
           return;
         case "share-guest":
           openGuestShareDialog(threadRef);

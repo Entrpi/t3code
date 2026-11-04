@@ -472,6 +472,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["subsession session delegate delegated task child nested count live sidebar"],
   },
   {
+    id: "detached-subsession-grouping",
+    title: "Detached subsessions",
+    to: "/settings/general",
+    searchTerms: ["detach reattach subsession top level group parent lineage separate"],
+  },
+  {
     id: "boring-sidebar",
     title: "Boring sidebar (group by project)",
     to: "/settings/labs",

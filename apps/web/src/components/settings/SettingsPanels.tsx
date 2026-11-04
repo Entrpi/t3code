@@ -16,6 +16,7 @@ import {
 } from "@t3tools/contracts";
 import {
   DEFAULT_UNIFIED_SETTINGS,
+  DetachedSubsessionGrouping,
   type DiffLayout,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
@@ -495,6 +496,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarSubsessions !== DEFAULT_UNIFIED_SETTINGS.sidebarSubsessions
       ? ["Subsessions in the sidebar"]
       : []),
+    ...(settings.detachedSubsessionGrouping !== DEFAULT_UNIFIED_SETTINGS.detachedSubsessionGrouping
+      ? ["Detached subsessions"]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -667,6 +671,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarKeepForksTogether: DEFAULT_UNIFIED_SETTINGS.sidebarKeepForksTogether,
       sidebarSubagents: DEFAULT_UNIFIED_SETTINGS.sidebarSubagents,
       sidebarSubsessions: DEFAULT_UNIFIED_SETTINGS.sidebarSubsessions,
+      detachedSubsessionGrouping: DEFAULT_UNIFIED_SETTINGS.detachedSubsessionGrouping,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -960,6 +965,45 @@ export function GeneralSettingsPanel() {
           searchId="sidebar-subsessions"
           label="Subsessions in the sidebar"
           description="Show the sessions a thread delegates work to, which keep their own history and can take follow-ups, under the thread: how many it has, only those still working or waiting for you, or all of them behind a toggle."
+        />
+        <SettingsRow
+          {...searchableSetting("detached-subsession-grouping")}
+          description="Right-click a subsession and choose Detach to top level to make it a thread of its own. Its current task still reports to its parent. Choose whether it stays beside its parent's lineage in the sidebar; you can change it per thread from its menu."
+          resetAction={
+            settings.detachedSubsessionGrouping !==
+            DEFAULT_UNIFIED_SETTINGS.detachedSubsessionGrouping ? (
+              <SettingResetButton
+                label="detached subsessions"
+                onClick={() =>
+                  updateSettings({
+                    detachedSubsessionGrouping: DEFAULT_UNIFIED_SETTINGS.detachedSubsessionGrouping,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.detachedSubsessionGrouping}
+              onValueChange={(value) => {
+                if (value === "grouped" || value === "separate")
+                  updateSettings({ detachedSubsessionGrouping: value });
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Detached subsessions">
+                <SelectValue>
+                  {DETACHED_GROUPING_LABELS[settings.detachedSubsessionGrouping]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {DetachedSubsessionGrouping.literals.map((grouping) => (
+                  <SelectItem hideIndicator key={grouping} value={grouping}>
+                    {DETACHED_GROUPING_LABELS[grouping]}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
         />
       </SettingsSection>
 
@@ -1289,6 +1333,11 @@ export function ChatSettingsPanel() {
     </SettingsPageContainer>
   );
 }
+
+const DETACHED_GROUPING_LABELS: Record<DetachedSubsessionGrouping, string> = {
+  grouped: "Beside its parent",
+  separate: "On its own",
+};
 
 function ChildThreadsSettingRow(props: {
   readonly settingKey: "sidebarSubagents" | "sidebarSubsessions";

@@ -1175,10 +1175,10 @@ export type SidebarLineageLink = "first" | "middle" | "last";
 
 export function sidebarLineageKey(
   thread: Pick<SidebarThreadSummary, "environmentId"> & {
-    readonly lineage: Pick<SidebarThreadSummary["lineage"], "rootThreadId">;
+    readonly lineage: Pick<SidebarThreadSummary["lineage"], "rootThreadId" | "groupThreadId">;
   },
 ): string {
-  return `${thread.environmentId}:${thread.lineage.rootThreadId}`;
+  return `${thread.environmentId}:${thread.lineage.groupThreadId ?? thread.lineage.rootThreadId}`;
 }
 
 /**
@@ -1187,7 +1187,7 @@ export function sidebarLineageKey(
  */
 export function clusterSidebarThreadsByLineage<
   TThread extends Pick<SidebarThreadSummary, "environmentId"> & {
-    readonly lineage: Pick<SidebarThreadSummary["lineage"], "rootThreadId">;
+    readonly lineage: Pick<SidebarThreadSummary["lineage"], "rootThreadId" | "groupThreadId">;
   },
 >(threads: readonly TThread[]): { threads: TThread[]; links: Map<TThread, SidebarLineageLink> } {
   const lineages = new Map<string, TThread[]>();

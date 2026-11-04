@@ -11,7 +11,18 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+
 import { cn } from "~/lib/utils";
+import { useDetachThread } from "../../hooks/useThreadActions";
+import { readLocalApi } from "../../localApi";
+import { readEnvironmentScope } from "../../state/session";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { threadFamilies } from "../../state/threads";
 import { useEnvironmentQuery } from "../../state/query";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -93,14 +104,53 @@ export function SidebarSubagentList(props: {
   );
   const rows = sidebarSubagentRows(parentId, props.live, family.data?.threads ?? [], origin);
   const readAgainFor = useRef<number | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a family read lasts the shell generation, so the server's count says when it missed a child
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a family read lasts the shell generation, so the server's count says when it missed or kept a child
   useEffect(() => {
-    if (!all || family.data == null || rows.length >= count || readAgainFor.current === count) {
+    if (!all || family.data == null || rows.length === count || readAgainFor.current === count) {
       return;
     }
     readAgainFor.current = count;
     threadFamilies.refresh(registry, environmentId, parentId);
   });
+  const detachThread = useDetachThread();
+  // Subagents run inside their parent's turn; only subsessions can stand on their own.
+  const openDetachMenu =
+    origin === "app_owned"
+      ? (event: ReactMouseEvent, threadId: ThreadId) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const api = readLocalApi();
+          if (!api) return;
+          const threadRef = scopeThreadRef(environmentId, threadId);
+          void (async () => {
+            const clicked = await settlePromise(() =>
+              api.contextMenu.show(
+                [
+                  {
+                    id: "detach",
+                    label: "Detach to top level",
+                    icon: "unlink",
+                    disabled: !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+                  },
+                ],
+                { x: event.clientX, y: event.clientY },
+              ),
+            );
+            if (clicked._tag === "Failure" || clicked.value !== "detach") return;
+            const result = await detachThread(threadRef);
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to detach thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+          })();
+        }
+      : undefined;
   if (rows.length === 0) return null;
   return (
     <ul className="ms-4.5 mt-0.5 mb-1 border-s border-border ps-1.5">
@@ -111,6 +161,11 @@ export function SidebarSubagentList(props: {
             <Link
               to="/$environmentId/$threadId"
               params={buildThreadRouteParams(scopeThreadRef(environmentId, thread.id))}
+              onContextMenu={
+                openDetachMenu === undefined
+                  ? undefined
+                  : (event) => openDetachMenu(event, thread.id)
+              }
               className="flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-xs text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[status=active]:bg-sidebar-row-active data-[status=active]:text-sidebar-foreground"
             >
               <span className="min-w-0 flex-1 truncate">{thread.title}</span>

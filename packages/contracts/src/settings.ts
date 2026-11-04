@@ -67,6 +67,8 @@ export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "upda
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export const SidebarChildThreads = Schema.Literals(["hidden", "count", "live", "all"]);
 export type SidebarChildThreads = typeof SidebarChildThreads.Type;
+export const DetachedSubsessionGrouping = Schema.Literals(["grouped", "separate"]);
+export type DetachedSubsessionGrouping = typeof DetachedSubsessionGrouping.Type;
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
@@ -499,6 +501,10 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarSubagents: SidebarChildThreads.pipe(Schema.withDecodingDefault(Effect.succeed("hidden"))),
   sidebarSubsessions: SidebarChildThreads.pipe(
     Schema.withDecodingDefault(Effect.succeed("hidden")),
+  ),
+  // Whether Detach keeps a subsession beside its old parent's lineage by default.
+  detachedSubsessionGrouping: DetachedSubsessionGrouping.pipe(
+    Schema.withDecodingDefault(Effect.succeed("grouped")),
   ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
@@ -1836,6 +1842,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarKeepForksTogether: Schema.optionalKey(Schema.Boolean),
   sidebarSubagents: Schema.optionalKey(SidebarChildThreads),
   sidebarSubsessions: Schema.optionalKey(SidebarChildThreads),
+  detachedSubsessionGrouping: Schema.optionalKey(DetachedSubsessionGrouping),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

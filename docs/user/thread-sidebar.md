@@ -179,6 +179,18 @@ A blue dot marks a child that is working, and an amber dot one that is waiting f
 to open it. Each device keeps its own choice. Work delegated to another environment is not
 counted.
 
+### Detach a subsession to top level
+
+When a subsession turns into work of its own, right-click it under its thread, or open its thread
+menu, and choose **Detach to top level**. It becomes a normal thread in your list with the same
+history. If it is still working on the task its parent gave it, that task still reports back to
+the parent; anything you send it afterwards does not.
+
+A detached session stays beside its old parent in the sidebar, or stands on its own, as set in
+**Settings → General → Detached subsessions**. Change it for one thread from its menu with
+**Group with parent** or **Separate from parent**. **Reattach to parent** makes it a subsession
+again. A detached session keeps working in its parent's folder or worktree.
+
 ### Group threads by project (beta)
 
 Turn on **Settings → Labs → Boring sidebar (group by project)** on web and desktop to put active

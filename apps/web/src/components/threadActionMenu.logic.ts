@@ -1,4 +1,8 @@
-import type { ContextMenuItem } from "@t3tools/contracts";
+import {
+  subagentOriginOf,
+  type ContextMenuItem,
+  type OrchestrationV2ThreadShell,
+} from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
@@ -20,6 +24,10 @@ export type ThreadActionMenuId =
   | "rename"
   | "regenerate-title"
   | "mark-unread"
+  | "detach"
+  | "reattach"
+  | "group-with-parent"
+  | "separate-from-parent"
   | "share-guest"
   | "copy"
   | "copy-path"
@@ -95,6 +103,23 @@ export interface ThreadActionMenuState {
   readonly canShareWithGuest?: boolean;
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
+  readonly subsession?: ThreadSubsessionState;
+}
+
+/** Where a delegated subsession stands: under its parent, or detached beside or apart from it. */
+export type ThreadSubsessionState = "attached" | "detached-grouped" | "detached-separate" | null;
+
+export function threadSubsessionState(
+  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "creationSource" | "forkedFrom">,
+): ThreadSubsessionState {
+  if (thread.lineage.detachedFrom !== undefined) {
+    return thread.lineage.groupThreadId === undefined ? "detached-grouped" : "detached-separate";
+  }
+  return thread.lineage.relationshipToParent === "subagent" &&
+    subagentOriginOf(thread.creationSource) === "app_owned" &&
+    thread.forkedFrom?.type === "node"
+    ? "attached"
+    : null;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -178,6 +203,20 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
+    ...(state.subsession === "attached"
+      ? [{ id: "detach" as const, label: "Detach to top level", icon: "unlink" }]
+      : state.subsession === "detached-grouped" || state.subsession === "detached-separate"
+        ? [
+            { id: "reattach" as const, label: "Reattach to parent", icon: "link" },
+            state.subsession === "detached-grouped"
+              ? {
+                  id: "separate-from-parent" as const,
+                  label: "Separate from parent",
+                  icon: "unlink",
+                }
+              : { id: "group-with-parent" as const, label: "Group with parent", icon: "link" },
+          ]
+        : []),
     ...(state.canShareWithGuest
       ? [{ id: "share-guest" as const, label: "Share with guest", icon: "user-plus" }]
       : []),
