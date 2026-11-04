@@ -168,12 +168,13 @@ A thread can start two kinds of child:
 
 A thread's card lists its subsessions under a caret, open by default; the sidebar remembers the
 cards you collapse. Each row shows its last activity, and a blue or amber dot while it is working
-or waiting for you. Subagents show only as a count of those working right now, beside the thread
+or waiting for you. A subsession that starts its own lists them under a caret on its row; while
+that row is collapsed, its dot also shows what the hidden ones are doing. Subagents show only as a count of those working right now, beside the thread
 or subsession running them. Turn the list off in **Settings → General → Show subsessions under
 their thread**, or right-click the project filter button.
 
 Settle a subsession from its row like any thread. It moves to the **Settled** section as a card
-of its own, and goes back under its thread when you un-settle it.
+of its own, its open subsessions with it, and goes back under its thread when you un-settle it.
 
 ### Detach a subsession to top level
 

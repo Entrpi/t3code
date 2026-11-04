@@ -38,8 +38,9 @@ import {
   activeSidebarSubagentCount,
   filterSidebarV2VisibleThreads,
   isSidebarHiddenThread,
-  sidebarSubsessionRows,
-  sidebarSubsessionsByParent,
+  sidebarSubsessionDescendants,
+  sidebarSubsessionTree,
+  type SidebarSubsessionNode,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
 } from "./Sidebar.logic";
@@ -1745,7 +1746,7 @@ describe("sidebar subsessions", () => {
   });
 
   it("lists a thread's open subsessions once, the shell's copy first, most recent first", () => {
-    const rows = sidebarSubsessionRows(
+    const rows = sidebarSubsessionTree(
       parent,
       [child("fresh", { title: "from the shell", latestUserMessageAt: at(9) })],
       [
@@ -1764,17 +1765,62 @@ describe("sidebar subsessions", () => {
         }),
       ],
     );
-    expect(rows.map((row) => row.title)).toEqual(["from the shell", "newer", "older"]);
+    expect(rows.map((row) => row.thread.title)).toEqual(["from the shell", "newer", "older"]);
   });
 
-  it("groups the shell's subsessions under their parent's key", () => {
-    const byParent = sidebarSubsessionsByParent([
+  it("nests subsessions under their own parent and rolls up what a collapsed row hides", () => {
+    const under = (
+      parentId: string,
+      id: string,
+      overrides: Partial<OrchestrationV2ThreadShell> = {},
+    ) =>
+      child(id, {
+        lineage: {
+          parentThreadId: ThreadId.make(parentId),
+          relationshipToParent: "subagent",
+          rootThreadId: parent,
+        },
+        ...overrides,
+      });
+    const tree = sidebarSubsessionTree(
+      parent,
+      [],
+      [
+        child("middle"),
+        under("middle", "grandchild"),
+        { ...under("grandchild", "waiting"), hasPendingApprovals: true },
+        child("settled", { settledOverride: "settled" }),
+        // A settled subsession's open children stay with it in the Settled section.
+        under("settled", "with settled"),
+        // A cycle ends the walk instead of looping.
+        under("loop", "loop"),
+      ],
+    );
+    const shape = (nodes: ReadonlyArray<SidebarSubsessionNode>): unknown =>
+      nodes.map((node) => [node.thread.id, node.descendantState, shape(node.children)]);
+    expect(shape(tree)).toEqual([
+      ["middle", "waiting", [["grandchild", "waiting", [["waiting", null, []]]]]],
+    ]);
+  });
+
+  it("groups the shell's subsessions under each subsession ancestor's key", () => {
+    const byAncestor = sidebarSubsessionDescendants([
       child("session"),
+      child("nested", {
+        lineage: {
+          parentThreadId: ThreadId.make("session"),
+          relationshipToParent: "subagent",
+          rootThreadId: parent,
+        },
+      }),
       child("native", { creationSource: "provider" }),
       presentThreadShell(localEnvironmentId, { ...makeThreadFixture().source, id: parent }),
     ]);
-    expect([...byParent].map(([key, rows]) => [key, rows.map((row) => row.id)])).toEqual([
-      [scopedThreadKey(scopeThreadRef(localEnvironmentId, parent)), ["session"]],
+    const key = (id: string) =>
+      scopedThreadKey(scopeThreadRef(localEnvironmentId, ThreadId.make(id)));
+    expect([...byAncestor].map(([key, rows]) => [key, rows.map((row) => row.id)])).toEqual([
+      [key("parent"), ["session", "nested"]],
+      [key("session"), ["nested"]],
     ]);
   });
 

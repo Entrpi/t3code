@@ -2,6 +2,7 @@ import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
+import { isThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
@@ -1102,40 +1103,101 @@ const isOpenSubsessionOf = (
   thread.archivedAt === null &&
   thread.settledOverride !== "settled";
 
+export type SidebarSubsessionState = "waiting" | "working";
+
+export interface SidebarSubsessionNode {
+  readonly thread: SidebarThreadSummary;
+  readonly children: ReadonlyArray<SidebarSubsessionNode>;
+  /** The most urgent state among the row's descendants, shown while it is collapsed. */
+  readonly descendantState: SidebarSubsessionState | null;
+}
+
+export function sidebarSubsessionState(
+  thread: SidebarThreadSummary,
+): SidebarSubsessionState | null {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "waiting";
+  return isThreadWorking(thread) ? "working" : null;
+}
+
+export const moreUrgentSubsessionState = (
+  left: SidebarSubsessionState | null,
+  right: SidebarSubsessionState | null,
+): SidebarSubsessionState | null =>
+  left === "waiting" || right === "waiting" ? "waiting" : (left ?? right);
+
 /**
- * A thread's subsessions under its card, most recently active first. Idle ones are only in the
- * family read; the shell's own copies are fresher. Settled ones are listed with settled threads.
+ * A thread's open subsessions under its card, each with its own, most recently active first.
+ * Idle ones are only in the family read; the shell's own copies are fresher. Settled ones are
+ * listed with settled threads, and their open subsessions go with them.
  */
-export function sidebarSubsessionRows(
+export function sidebarSubsessionTree(
   parentId: ThreadId,
   known: ReadonlyArray<SidebarThreadSummary>,
   family: ReadonlyArray<SidebarThreadSummary>,
-): SidebarThreadSummary[] {
+): SidebarSubsessionNode[] {
   const byId = new Map<string, SidebarThreadSummary>();
   for (const thread of [...family, ...known]) byId.set(thread.id, thread);
-  return [...byId.values()]
-    .filter((thread) => isOpenSubsessionOf(parentId, thread))
-    .toSorted(
-      (left, right) =>
-        Date.parse(right.latestUserMessageAt ?? right.updatedAt) -
-        Date.parse(left.latestUserMessageAt ?? left.updatedAt),
-    );
+  const threads = [...byId.values()];
+  const visited = new Set<ThreadId>([parentId]);
+  const branch = (id: ThreadId): SidebarSubsessionNode[] =>
+    threads
+      .filter((thread) => isOpenSubsessionOf(id, thread) && !visited.has(thread.id))
+      .toSorted(
+        (left, right) =>
+          Date.parse(right.latestUserMessageAt ?? right.updatedAt) -
+          Date.parse(left.latestUserMessageAt ?? left.updatedAt),
+      )
+      .map((thread) => {
+        visited.add(thread.id);
+        const children = branch(thread.id);
+        return {
+          thread,
+          children,
+          descendantState: children.reduce<SidebarSubsessionState | null>(
+            (state, child) =>
+              moreUrgentSubsessionState(
+                state,
+                moreUrgentSubsessionState(
+                  sidebarSubsessionState(child.thread),
+                  child.descendantState,
+                ),
+              ),
+            null,
+          ),
+        };
+      });
+  return branch(parentId);
 }
 
-/** The shell's subsessions by their parent's thread key, whatever their state. */
-export function sidebarSubsessionsByParent(
+/** The shell's subsessions under the key of every ancestor up to the first one that isn't one. */
+export function sidebarSubsessionDescendants(
   threads: ReadonlyArray<SidebarThreadSummary>,
 ): Map<string, SidebarThreadSummary[]> {
-  const byParent = new Map<string, SidebarThreadSummary[]>();
-  for (const thread of threads) {
-    const { parentThreadId } = thread.lineage;
-    if (parentThreadId === null || !isSubsessionThread(thread.source)) continue;
-    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, parentThreadId));
-    const siblings = byParent.get(key);
-    if (siblings === undefined) byParent.set(key, [thread]);
-    else siblings.push(thread);
+  // The walk stops at the first ancestor that isn't a subsession, so only subsessions need indexing.
+  const subsessions = threads.filter((thread) => isSubsessionThread(thread.source));
+  const byId = new Map(
+    subsessions.map((thread) => [
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      thread,
+    ]),
+  );
+  const byAncestor = new Map<string, SidebarThreadSummary[]>();
+  for (const thread of subsessions) {
+    const visited = new Set<string>();
+    let parentId = thread.lineage.parentThreadId;
+    while (parentId !== null) {
+      const key = scopedThreadKey(scopeThreadRef(thread.environmentId, parentId));
+      if (visited.has(key)) break;
+      visited.add(key);
+      const rows = byAncestor.get(key);
+      if (rows === undefined) byAncestor.set(key, [thread]);
+      else rows.push(thread);
+      const ancestor = byId.get(key);
+      if (ancestor === undefined) break;
+      parentId = ancestor.lineage.parentThreadId;
+    }
   }
-  return byParent;
+  return byAncestor;
 }
 
 export type SidebarLineageLink = "first" | "middle" | "last";

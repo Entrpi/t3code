@@ -1,11 +1,10 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { isThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -28,10 +27,17 @@ import { useDetachThread } from "../../hooks/useThreadActions";
 import { readLocalApi } from "../../localApi";
 import { readEnvironmentScope } from "../../state/session";
 import { threadFamilies } from "../../state/threads";
+import { useUiStateStore } from "../../uiStateStore";
 import { useEnvironmentQuery } from "../../state/query";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import type { SidebarThreadSummary } from "../../types";
-import { activeSidebarSubagentCount, sidebarSubsessionRows } from "../Sidebar.logic";
+import {
+  activeSidebarSubagentCount,
+  moreUrgentSubsessionState,
+  sidebarSubsessionState,
+  sidebarSubsessionTree,
+  type SidebarSubsessionNode,
+} from "../Sidebar.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { RelativeTimeLabel, threadTimeTimestamp } from "./SidebarRelativeTime";
@@ -68,7 +74,7 @@ export function SidebarSubsessionsToggle(props: {
       type="button"
       aria-expanded={props.expanded}
       aria-label={label}
-      className="-mx-1 inline-flex shrink-0 items-center rounded-sm px-1 text-secondary-label hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className="relative -mx-1 inline-flex shrink-0 items-center rounded-sm px-1 text-secondary-label hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={(event) => {
         event.stopPropagation();
         props.onToggle();
@@ -81,11 +87,31 @@ export function SidebarSubsessionsToggle(props: {
   );
 }
 
-/** A thread's open subsessions under its card. */
+// Deeper subsessions stop indenting so titles keep their width in a narrow sidebar.
+const INDENTED_DEPTHS = 3;
+
+const SUBSESSION_DOT = { waiting: "bg-warning", working: "bg-info" } as const;
+
+const familyMisses = (
+  nodes: ReadonlyArray<SidebarSubsessionNode>,
+  parentId: ThreadId,
+  expected: number,
+): string[] => [
+  ...(nodes.length === expected ? [] : [`${parentId}:${expected}`]),
+  ...nodes.flatMap((node) =>
+    familyMisses(
+      node.children,
+      node.thread.id,
+      node.thread.subagentCounts?.appOwned ?? node.children.length,
+    ),
+  ),
+];
+
+/** A thread's open subsessions under its card, each with its own under a caret. */
 export function SidebarSubsessionList(props: {
   readonly environmentId: EnvironmentId;
   readonly parentId: ThreadId;
-  /** The shell's copies of this thread's subsessions; idle ones come from the family read. */
+  /** The shell's copies of this thread's subsessions at any depth; idle ones come from the family read. */
   readonly known: ReadonlyArray<SidebarThreadSummary>;
   readonly count: number;
   readonly onSettle: (threadRef: ScopedThreadRef) => void;
@@ -93,16 +119,19 @@ export function SidebarSubsessionList(props: {
   const { environmentId, parentId, count } = props;
   const registry = useContext(RegistryContext);
   const family = useEnvironmentQuery(threadFamilies.familyAtom(environmentId, parentId));
-  const rows = sidebarSubsessionRows(
+  const tree = sidebarSubsessionTree(
     parentId,
     props.known,
     (family.data?.threads ?? []).map((shell) => presentThreadShell(environmentId, shell)),
   );
-  const readAgainFor = useRef<number | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a family read lasts the shell generation, so the server's count says when it missed or kept a child
+  const collapsedKeys = useUiStateStore((state) => state.collapsedSubsessionThreadKeys);
+  const setSubsessionsCollapsed = useUiStateStore((state) => state.setSubsessionsCollapsed);
+  const misses = familyMisses(tree, parentId, count).join(",");
+  const readAgainFor = useRef<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a family read lasts the shell generation, so the server's counts say when it missed or kept a child
   useEffect(() => {
-    if (family.data == null || rows.length === count || readAgainFor.current === count) return;
-    readAgainFor.current = count;
+    if (family.data == null || misses === "" || readAgainFor.current === misses) return;
+    readAgainFor.current = misses;
     threadFamilies.refresh(registry, environmentId, parentId);
   });
   const detachThread = useDetachThread();
@@ -138,52 +167,75 @@ export function SidebarSubsessionList(props: {
       }
     })();
   };
-  if (rows.length === 0) return null;
-  return (
-    <ul className="ms-4.5 mt-0.5 mb-1 border-s border-border ps-1.5">
-      {rows.map((thread) => {
+  const renderBranch = (nodes: ReadonlyArray<SidebarSubsessionNode>, depth: number) => (
+    <ul
+      className={cn(
+        depth === 0 && "ms-4.5 mt-0.5 mb-1 border-s border-border ps-1.5",
+        depth > 0 && depth < INDENTED_DEPTHS && "ms-3 border-s border-border ps-1.5",
+      )}
+    >
+      {nodes.map(({ thread, children, descendantState }) => {
         const threadRef = scopeThreadRef(environmentId, thread.id);
+        const threadKey = scopedThreadKey(threadRef);
+        const collapsed = collapsedKeys.includes(threadKey);
+        const ownState = sidebarSubsessionState(thread);
         const state =
-          thread.hasPendingApprovals || thread.hasPendingUserInput
-            ? "bg-warning"
-            : isThreadWorking(thread)
-              ? "bg-info"
-              : null;
+          collapsed && children.length > 0
+            ? moreUrgentSubsessionState(ownState, descendantState)
+            : ownState;
         return (
-          <li key={thread.id} className="group/subsession relative list-none">
-            <Link
-              to="/$environmentId/$threadId"
-              params={buildThreadRouteParams(threadRef)}
+          <li key={thread.id} className="list-none">
+            <div
               onContextMenu={(event) => openRowMenu(event, threadRef)}
-              className="flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-xs text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[status=active]:bg-sidebar-row-active data-[status=active]:text-sidebar-foreground"
+              className="group/subsession relative flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-xs text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground has-[[data-status=active]]:bg-sidebar-row-active has-[[data-status=active]]:text-sidebar-foreground"
             >
               {state === null ? null : (
-                <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", state)} />
+                <span
+                  aria-hidden
+                  className={cn("size-1.5 shrink-0 rounded-full", SUBSESSION_DOT[state])}
+                />
               )}
-              <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+              {/* The link's overlay makes the whole row clickable around the caret. */}
+              <Link
+                to="/$environmentId/$threadId"
+                params={buildThreadRouteParams(threadRef)}
+                className="min-w-0 flex-1 truncate after:absolute after:inset-0 after:rounded-md focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
+              >
+                {thread.title}
+              </Link>
+              {children.length > 0 ? (
+                <SidebarSubsessionsToggle
+                  count={children.length}
+                  expanded={!collapsed}
+                  onToggle={() => setSubsessionsCollapsed(threadKey, !collapsed)}
+                />
+              ) : null}
               <SidebarActiveSubagents count={activeSidebarSubagentCount(thread)} />
               <span className="shrink-0 tabular-nums group-hover/subsession:invisible">
                 <RelativeTimeLabel timestamp={threadTimeTimestamp(thread)} />
               </span>
-            </Link>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label="Settle thread"
-                    onClick={() => props.onSettle(threadRef)}
-                    className="pointer-events-none absolute inset-y-0 right-0 inline-flex items-center rounded-md px-2 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/subsession:pointer-events-auto group-hover/subsession:opacity-100"
-                  />
-                }
-              >
-                <CheckIcon aria-hidden className="size-3" />
-              </TooltipTrigger>
-              <TooltipPopup side="top">Settle thread</TooltipPopup>
-            </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Settle thread"
+                      onClick={() => props.onSettle(threadRef)}
+                      className="pointer-events-none absolute inset-y-0 right-0 inline-flex items-center rounded-md px-2 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/subsession:pointer-events-auto group-hover/subsession:opacity-100"
+                    />
+                  }
+                >
+                  <CheckIcon aria-hidden className="size-3" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">Settle thread</TooltipPopup>
+              </Tooltip>
+            </div>
+            {children.length > 0 && !collapsed ? renderBranch(children, depth + 1) : null}
           </li>
         );
       })}
     </ul>
   );
+  if (tree.length === 0) return null;
+  return renderBranch(tree, 0);
 }

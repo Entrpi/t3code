@@ -187,7 +187,7 @@ import {
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   clusterSidebarThreadsByLineage,
-  sidebarSubsessionsByParent,
+  sidebarSubsessionDescendants,
   sidebarLineageKey,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
@@ -335,7 +335,7 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const NO_SUBSESSIONS: readonly SidebarThreadSummary[] = [];
-const NO_SUBSESSIONS_BY_PARENT: ReadonlyMap<string, SidebarThreadSummary[]> = new Map();
+const NO_SUBSESSIONS_BY_ANCESTOR: ReadonlyMap<string, SidebarThreadSummary[]> = new Map();
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -1161,9 +1161,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
-  const subsessionsByParent = showSubsessions
-    ? sidebarSubsessionsByParent(threads)
-    : NO_SUBSESSIONS_BY_PARENT;
+  const subsessionsByAncestor = showSubsessions
+    ? sidebarSubsessionDescendants(threads)
+    : NO_SUBSESSIONS_BY_ANCESTOR;
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -3448,7 +3448,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             variant={rowVariant}
                             lineageLink={lineageLinkByKey.get(threadKey) ?? null}
                             showSubsessions={showSubsessions}
-                            subsessions={subsessionsByParent.get(threadKey) ?? NO_SUBSESSIONS}
+                            subsessions={subsessionsByAncestor.get(threadKey) ?? NO_SUBSESSIONS}
                             subsessionsCollapsed={collapsedSubsessionThreadKeys.includes(threadKey)}
                             onToggleSubsessions={toggleSubsessions}
                             navigationParent={

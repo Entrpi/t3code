@@ -545,7 +545,7 @@ type SidebarThreadRowProps = {
   // Where an Active row sits in a fork lineage of two or more, for the connector line.
   lineageLink: SidebarLineageLink | null;
   showSubsessions: boolean;
-  // The shell's copies of this thread's subsessions; the list reads idle ones itself.
+  // The shell's copies of this thread's subsessions at any depth; the list reads idle ones itself.
   subsessions: ReadonlyArray<SidebarThreadSummary>;
   // Kept by the sidebar, so a collapsed list stays collapsed across reloads.
   subsessionsCollapsed: boolean;
@@ -1150,7 +1150,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     ) : null;
   const diff = latestRunDiff(thread);
   const openSubsessionCount = props.subsessions.filter(
-    (child) => child.archivedAt === null && child.settledOverride !== "settled",
+    (child) =>
+      child.lineage.parentThreadId === thread.id &&
+      child.archivedAt === null &&
+      child.settledOverride !== "settled",
   ).length;
   // Older servers send no count; the shell's own copies still show.
   const subsessionCount = Math.max(thread.subagentCounts?.appOwned ?? 0, openSubsessionCount);
