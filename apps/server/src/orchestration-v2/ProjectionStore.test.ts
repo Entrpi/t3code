@@ -2243,6 +2243,44 @@ it.effect("SQL snapshot windows keep cards for requests still pending", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
+it("names the subagents still working in a thread's active run", () => {
+  const activeRunId = RunId.make("run:active");
+  const item = (
+    childThreadId: string | null,
+    status: OrchestrationV2TurnItem["status"],
+    runId: RunId | null = activeRunId,
+    type = "subagent",
+  ) =>
+    ({
+      type,
+      runId,
+      status,
+      title: childThreadId === null ? null : `Task ${childThreadId}`,
+      childThreadId: childThreadId === null ? null : ThreadId.make(childThreadId),
+    }) as OrchestrationV2TurnItem;
+  assert.deepStrictEqual(
+    ProjectionStore.workingSubagentsOf(
+      [
+        item("running", "running"),
+        item("waiting", "waiting"),
+        item("done", "completed"),
+        item("older-run", "running", RunId.make("run:old")),
+        item(null, "running"),
+        item("tool", "running", activeRunId, "dynamic_tool"),
+      ],
+      activeRunId,
+    ),
+    [
+      { threadId: ThreadId.make("running"), title: "Task running" },
+      { threadId: ThreadId.make("waiting"), title: "Task waiting" },
+    ],
+  );
+  assert.deepStrictEqual(
+    ProjectionStore.workingSubagentsOf([item("running", "running")], null),
+    [],
+  );
+});
+
 it.effect("lists only active subagents and their parents without loading shell data", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;

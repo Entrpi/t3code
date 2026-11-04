@@ -2123,6 +2123,13 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
    * there are none and from older servers.
    */
   subagentCount: Schema.optional(NonNegativeInt),
+  /**
+   * Subagents still working in the active run. Provider-native ones have no run of their own, so
+   * their child shells look idle. Absent when there are none and from older servers.
+   */
+  workingSubagents: Schema.optional(
+    Schema.Array(Schema.Struct({ threadId: ThreadId, title: Schema.NullOr(Schema.String) })),
+  ),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */

@@ -1532,6 +1532,31 @@ const linkCardStillAsks = (
   latestUserAuthoredMessageAt === null ||
   !DateTime.isGreaterThan(latestUserAuthoredMessageAt, item.startedAt ?? item.updatedAt);
 
+const withWorkingSubagents = (
+  workingSubagents: NonNullable<OrchestrationV2ThreadShell["workingSubagents"]>,
+) => (workingSubagents.length === 0 ? {} : { workingSubagents });
+
+const WORKING_SUBAGENT_STATUSES: ReadonlySet<OrchestrationV2TurnItem["status"]> = new Set([
+  "pending",
+  "running",
+  "waiting",
+]);
+
+export function workingSubagentsOf(
+  turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
+  activeRunId: RunId | null,
+): NonNullable<OrchestrationV2ThreadShell["workingSubagents"]> {
+  if (activeRunId === null) return [];
+  return turnItems.flatMap((item) =>
+    item.type === "subagent" &&
+    item.childThreadId !== null &&
+    item.runId === activeRunId &&
+    WORKING_SUBAGENT_STATUSES.has(item.status)
+      ? [{ threadId: item.childThreadId, title: item.title }]
+      : [],
+  );
+}
+
 export function threadShellFromProjection(
   projection: OrchestrationV2ThreadProjection,
 ): OrchestrationV2ThreadShell {
@@ -1654,6 +1679,7 @@ export function threadShellFromProjection(
     ),
     pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(projection.thread.guestShare),
+    ...withWorkingSubagents(workingSubagentsOf(projection.turnItems, activeRun?.id ?? null)),
     // Thread detail owns message bodies. Keeping them out of shell rows makes
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
@@ -1772,6 +1798,7 @@ type ShellThreadState = {
   readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
+  readonly workingSubagents: NonNullable<OrchestrationV2ThreadShell["workingSubagents"]>;
   readonly providerInstanceHistory: OrchestrationV2ThreadShell["providerInstanceHistory"];
   readonly goal: OrchestrationV2ThreadShell["goal"];
   readonly itemCount: number;
@@ -1930,6 +1957,7 @@ function shellFromState(input: {
     usageLimitResetAt: input.state.usageLimitResetAt,
     pendingRuntimeRequest: input.state.pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
+    ...withWorkingSubagents(input.state.workingSubagents),
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
@@ -6879,6 +6907,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           latestUserAuthoredMessageAt,
           hasActionableProposedPlan: row.has_actionable_proposed_plan === 1,
           pendingBackgroundTasks,
+          workingSubagents: workingSubagentsOf(
+            pendingTurnItemsByThreadId.get(thread.id) ?? [],
+            row.active_run_id === null ? null : RunId.make(row.active_run_id),
+          ),
           providerInstanceHistory: providerInstanceHistoryForShell({
             threadId: thread.id,
             providerThreads: providerThreadsByThreadId.get(thread.id) ?? [],
