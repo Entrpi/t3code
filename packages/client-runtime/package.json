@@ -363,6 +363,10 @@
       "types": "./src/state/contextWindow.ts",
       "default": "./src/state/contextWindow.ts"
     },
+    "./state/subsessions": {
+      "types": "./src/state/subsessions.ts",
+      "default": "./src/state/subsessions.ts"
+    },
     "./state/thread-subagents": {
       "types": "./src/state/threadSubagents.ts",
       "default": "./src/state/threadSubagents.ts"

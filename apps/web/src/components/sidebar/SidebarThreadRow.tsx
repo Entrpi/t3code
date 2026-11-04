@@ -77,7 +77,6 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
   hasUnseenCompletion,
-  activeSidebarSubagentCount,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   type SidebarLineageLink,
@@ -104,6 +103,7 @@ import {
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
 import { useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
+import { activeSubagentCount } from "@t3tools/client-runtime/state/subsessions";
 import {
   SidebarActiveSubagents,
   SidebarSubsessionList,
@@ -1165,9 +1165,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         onToggle={() => props.onToggleSubsessions(threadKey)}
       />
     ) : null;
-  const activeSubagentCount = activeSidebarSubagentCount(thread);
+  const workingSubagentCount = activeSubagentCount(thread);
   const activeSubagents =
-    activeSubagentCount > 0 ? <SidebarActiveSubagents count={activeSubagentCount} /> : null;
+    workingSubagentCount > 0 ? <SidebarActiveSubagents count={workingSubagentCount} /> : null;
   const subsessionList =
     subsessionCaret !== null && !props.subsessionsCollapsed ? (
       <SidebarSubsessionList

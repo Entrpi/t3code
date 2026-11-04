@@ -1,8 +1,5 @@
-import {
-  subagentOriginOf,
-  type ContextMenuItem,
-  type OrchestrationV2ThreadShell,
-} from "@t3tools/contracts";
+import { type ContextMenuItem } from "@t3tools/contracts";
+import type { ThreadSubsessionState } from "@t3tools/client-runtime/state/subsessions";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
@@ -104,22 +101,6 @@ export interface ThreadActionMenuState {
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
   readonly subsession?: ThreadSubsessionState;
-}
-
-/** Where a delegated subsession stands: under its parent, or detached beside or apart from it. */
-export type ThreadSubsessionState = "attached" | "detached-grouped" | "detached-separate" | null;
-
-export function threadSubsessionState(
-  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "creationSource" | "forkedFrom">,
-): ThreadSubsessionState {
-  if (thread.lineage.detachedFrom !== undefined) {
-    return thread.lineage.groupThreadId === undefined ? "detached-grouped" : "detached-separate";
-  }
-  return thread.lineage.relationshipToParent === "subagent" &&
-    subagentOriginOf(thread.creationSource) === "app_owned" &&
-    thread.forkedFrom?.type === "node"
-    ? "attached"
-    : null;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */

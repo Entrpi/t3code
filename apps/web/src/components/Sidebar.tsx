@@ -2,6 +2,10 @@ import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { attachSidebarTree } from "../lib/sidebarTree";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
+import {
+  subsessionDescendants,
+  threadSubsessionState,
+} from "@t3tools/client-runtime/state/subsessions";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
   dropThreadContext,
@@ -180,14 +184,12 @@ import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
   threadActionRequiresOperate,
-  threadSubsessionState,
 } from "./threadActionMenu.logic";
 import {
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   clusterSidebarThreadsByLineage,
-  sidebarSubsessionDescendants,
   sidebarLineageKey,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
@@ -1162,7 +1164,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         );
   const threads = useQuietThreadShells();
   const subsessionsByAncestor = showSubsessions
-    ? sidebarSubsessionDescendants(threads)
+    ? subsessionDescendants(threads)
     : NO_SUBSESSIONS_BY_ANCESTOR;
   const routeRowThreadKey =
     routeThreadRef === null

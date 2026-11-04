@@ -32,12 +32,12 @@ import { useEnvironmentQuery } from "../../state/query";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import type { SidebarThreadSummary } from "../../types";
 import {
-  activeSidebarSubagentCount,
+  activeSubagentCount,
   moreUrgentSubsessionState,
-  sidebarSubsessionState,
-  sidebarSubsessionTree,
-  type SidebarSubsessionNode,
-} from "../Sidebar.logic";
+  subsessionState,
+  subsessionTree,
+  type SubsessionNode,
+} from "@t3tools/client-runtime/state/subsessions";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { RelativeTimeLabel, threadTimeTimestamp } from "./SidebarRelativeTime";
@@ -93,7 +93,7 @@ const INDENTED_DEPTHS = 3;
 const SUBSESSION_DOT = { waiting: "bg-warning", working: "bg-info" } as const;
 
 const familyMisses = (
-  nodes: ReadonlyArray<SidebarSubsessionNode>,
+  nodes: ReadonlyArray<SubsessionNode>,
   parentId: ThreadId,
   expected: number,
 ): string[] => [
@@ -119,7 +119,7 @@ export function SidebarSubsessionList(props: {
   const { environmentId, parentId, count } = props;
   const registry = useContext(RegistryContext);
   const family = useEnvironmentQuery(threadFamilies.familyAtom(environmentId, parentId));
-  const tree = sidebarSubsessionTree(
+  const tree = subsessionTree(
     parentId,
     props.known,
     (family.data?.threads ?? []).map((shell) => presentThreadShell(environmentId, shell)),
@@ -167,7 +167,7 @@ export function SidebarSubsessionList(props: {
       }
     })();
   };
-  const renderBranch = (nodes: ReadonlyArray<SidebarSubsessionNode>, depth: number) => (
+  const renderBranch = (nodes: ReadonlyArray<SubsessionNode>, depth: number) => (
     <ul
       className={cn(
         depth === 0 && "ms-4.5 mt-0.5 mb-1 border-s border-border ps-1.5",
@@ -178,7 +178,7 @@ export function SidebarSubsessionList(props: {
         const threadRef = scopeThreadRef(environmentId, thread.id);
         const threadKey = scopedThreadKey(threadRef);
         const collapsed = collapsedKeys.includes(threadKey);
-        const ownState = sidebarSubsessionState(thread);
+        const ownState = subsessionState(thread);
         const state =
           collapsed && children.length > 0
             ? moreUrgentSubsessionState(ownState, descendantState)
@@ -210,7 +210,7 @@ export function SidebarSubsessionList(props: {
                   onToggle={() => setSubsessionsCollapsed(threadKey, !collapsed)}
                 />
               ) : null}
-              <SidebarActiveSubagents count={activeSidebarSubagentCount(thread)} />
+              <SidebarActiveSubagents count={activeSubagentCount(thread)} />
               <span className="shrink-0 tabular-nums group-hover/subsession:invisible">
                 <RelativeTimeLabel timestamp={threadTimeTimestamp(thread)} />
               </span>

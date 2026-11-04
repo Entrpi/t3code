@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { NodeId, ThreadId } from "@t3tools/contracts";
-
-import {
-  buildThreadActionMenuItems,
-  threadSubsessionState,
-  type ThreadActionMenuState,
-} from "./threadActionMenu.logic";
+import { buildThreadActionMenuItems, type ThreadActionMenuState } from "./threadActionMenu.logic";
 
 const baseState: ThreadActionMenuState = {
   canOperate: true,
@@ -79,74 +73,5 @@ describe("buildThreadActionMenuItems", () => {
     });
     expect(items.find((item) => item.id === "archive")?.disabled).toBe(true);
     expect(items.find((item) => item.id === "turn-into-project")?.disabled).toBe(true);
-  });
-});
-
-describe("threadSubsessionState", () => {
-  const parent = ThreadId.make("parent");
-  const root = ThreadId.make("root");
-  const fromTask = { type: "node" as const, threadId: parent, nodeId: NodeId.make("task") };
-  const subagent = {
-    parentThreadId: parent,
-    relationshipToParent: "subagent" as const,
-    rootThreadId: root,
-  };
-
-  it.each([
-    [
-      "a delegated child",
-      { lineage: subagent, creationSource: "mcp", forkedFrom: fromTask },
-      "attached",
-    ],
-    // Provider-native subagents run inside their parent's turn and cannot stand alone.
-    [
-      "a provider-native child",
-      { lineage: subagent, creationSource: "provider", forkedFrom: fromTask },
-      null,
-    ],
-    [
-      "a subsession detached beside its parent",
-      {
-        lineage: {
-          parentThreadId: null,
-          relationshipToParent: null,
-          rootThreadId: root,
-          detachedFrom: { threadId: parent },
-        },
-        creationSource: "mcp",
-        forkedFrom: fromTask,
-      },
-      "detached-grouped",
-    ],
-    [
-      "a subsession detached on its own",
-      {
-        lineage: {
-          parentThreadId: null,
-          relationshipToParent: null,
-          rootThreadId: root,
-          detachedFrom: { threadId: parent },
-          groupThreadId: ThreadId.make("child"),
-        },
-        creationSource: "mcp",
-        forkedFrom: fromTask,
-      },
-      "detached-separate",
-    ],
-    [
-      "a fork",
-      {
-        lineage: {
-          parentThreadId: parent,
-          relationshipToParent: "fork" as const,
-          rootThreadId: root,
-        },
-        creationSource: "web",
-        forkedFrom: null,
-      },
-      null,
-    ],
-  ] as const)("knows %s", (_name, thread, expected) => {
-    expect(threadSubsessionState(thread)).toBe(expected);
   });
 });
