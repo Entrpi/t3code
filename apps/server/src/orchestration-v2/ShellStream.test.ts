@@ -27,6 +27,12 @@ import {
   shellStreamItemsFromInitialSnapshot,
   shouldPublishShellApplicationEvent,
   skipUnchangedThreadShells,
+  subagentCountsOf,
+  subagentParentsOf,
+  toShellApplicationEvent,
+  trackSubagentParent,
+  withSubagentCount,
+  withSubagentParentRefreshes,
 } from "./ShellStream.ts";
 
 const emptyShellSnapshot = {
@@ -202,6 +208,73 @@ describe("omitIdleSubagentShells", () => {
         omitted.subagentThreadIds,
       ),
     ).toBe(false);
+  });
+});
+
+describe("subagent counts", () => {
+  const lineage = (parent: string | null) => ({
+    parentThreadId: parent === null ? null : ThreadId.make(parent),
+    relationshipToParent: parent === null ? null : ("subagent" as const),
+    rootThreadId: ThreadId.make("root"),
+  });
+  const row = (id: string, parent: string | null) =>
+    shellFixture({ id: ThreadId.make(id), lineage: lineage(parent) });
+
+  it("gives each parent the count of its active subagents, idle ones included", () => {
+    const parents = subagentParentsOf([
+      row("root", null),
+      row("idle", "root"),
+      row("running", "root"),
+      row("grandchild", "running"),
+      row("lonely", null),
+    ]);
+    const counts = subagentCountsOf(parents);
+    const stamped = [row("root", null), row("running", "root"), row("lonely", null)].map((thread) =>
+      withSubagentCount(thread, counts),
+    );
+    expect(stamped.map((thread) => [thread.id, thread.subagentCount])).toEqual([
+      ["root", 2],
+      ["running", 1],
+      ["lonely", undefined],
+    ]);
+    expect("subagentCount" in stamped[2]!).toBe(false);
+  });
+
+  it("follows subagent lifecycle events and refreshes the parent they change", () => {
+    const parents = new Map<string, ThreadId>();
+    const event = (type: string, threadId = "child") =>
+      ({
+        sequence: 7,
+        event: { threadId, type, payload: { lineage: lineage("root") } },
+      }) as ApplicationStoredEvent;
+
+    trackSubagentParent(event("thread.created"), parents);
+    expect([...parents]).toEqual([["child", "root"]]);
+    trackSubagentParent(event("thread.archived"), parents);
+    expect(parents.size).toBe(0);
+    trackSubagentParent(event("thread.unarchived"), parents);
+    expect(parents.get("child")).toBe("root");
+    trackSubagentParent(event("thread.deleted"), parents);
+    expect(parents.size).toBe(0);
+
+    expect(toShellApplicationEvent(event("thread.archived"))).toEqual({
+      sequence: 7,
+      event: { threadId: "child" },
+      parentThreadId: "root",
+    });
+    expect(
+      withSubagentParentRefreshes([
+        toShellApplicationEvent(event("thread.created")),
+        toShellApplicationEvent({
+          sequence: 8,
+          event: { threadId: "child", type: "turn-item.updated", payload: {} },
+        } as ApplicationStoredEvent),
+      ]),
+    ).toEqual([
+      { sequence: 7, event: { threadId: "child" }, parentThreadId: "root" },
+      { sequence: 7, event: { threadId: "root" } },
+      { sequence: 8, event: { threadId: "child" } },
+    ]);
   });
 });
 

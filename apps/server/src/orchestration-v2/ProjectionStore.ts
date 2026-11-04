@@ -427,6 +427,11 @@ export interface ActiveShellIndexEntry extends Pick<
   readonly mayBeLive: boolean;
 }
 
+export interface ActiveSubagent {
+  readonly threadId: ThreadId;
+  readonly parentThreadId: ThreadId | null;
+}
+
 export interface OlderSettledThreadsQuery {
   readonly before: OrchestrationV2OlderSettledCursor;
   readonly projectIds?: ReadonlyArray<ProjectId> | undefined;
@@ -508,8 +513,8 @@ export interface ProjectionStoreV2Shape {
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, ProjectionStoreV2Error>;
-  readonly listActiveSubagentThreadIds: () => Effect.Effect<
-    ReadonlyArray<ThreadId>,
+  readonly listActiveSubagents: () => Effect.Effect<
+    ReadonlyArray<ActiveSubagent>,
     ProjectionStoreV2Error
   >;
   /** Threads that are not deleted, archived ones included. */
@@ -7127,19 +7132,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         .withTransaction(readShellSnapshotRows(options))
         .pipe(Effect.mapError(shellSnapshotReadError), Effect.flatMap(decodeShellSnapshot));
 
-    const listActiveSubagentThreadIds = Effect.fn("ProjectionStore.listActiveSubagentThreadIds")(
-      function* () {
-        const rows = yield* sql<{ readonly thread_id: string }>`
-        SELECT thread_id
+    const listActiveSubagents = Effect.fn("ProjectionStore.listActiveSubagents")(function* () {
+      const rows = yield* sql<{
+        readonly thread_id: string;
+        readonly parent_thread_id: string | null;
+      }>`
+        SELECT thread_id, json_extract(payload_json, '$.lineage.parentThreadId') AS parent_thread_id
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL
           AND json_extract(payload_json, '$.archivedAt') IS NULL
           AND json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
       `;
-        return rows.map((row) => ThreadId.make(row.thread_id));
-      },
-      Effect.mapError(shellSnapshotReadError),
-    );
+      return rows.map((row) => ({
+        threadId: ThreadId.make(row.thread_id),
+        parentThreadId: row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
+      }));
+    }, Effect.mapError(shellSnapshotReadError));
 
     const countThreads = Effect.fn("ProjectionStore.countThreads")(function* () {
       const rows = yield* sql<{ readonly count: number }>`
@@ -7404,7 +7412,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getAgentAwarenessSnapshot: readOnReader(getAgentAwarenessSnapshot),
       getShellSnapshot: readOnReader(getShellSnapshot),
       getPullRequestSnapshot: readOnReader(getPullRequestSnapshot),
-      listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
+      listActiveSubagents: readOnReader(listActiveSubagents),
       countThreads: readOnReader(countThreads),
       listActiveShellIndex: readOnReader(listActiveShellIndex),
       readShellSnapshot: readOnReader(readShellSnapshot),

@@ -142,6 +142,10 @@ import {
   shouldPublishShellApplicationEvent,
   skipUnchangedThreadShells,
   toShellApplicationEvent,
+  trackSubagentParent,
+  withSubagentCount,
+  withSubagentParentRefreshes,
+  subagentCountsOf,
   type ShellApplicationEvent,
 } from "./orchestration-v2/ShellStream.ts";
 import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
@@ -1093,8 +1097,11 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projectService = yield* ProjectService.ProjectService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
     let subagentThreadIds = new Set<string>();
-    const filterSubagentTranscript = (stored: ApplicationStoredEvent) =>
-      shouldPublishShellApplicationEvent(stored, subagentThreadIds);
+    let subagentParents = new Map<string, ThreadId>();
+    const filterSubagentTranscript = (stored: ApplicationStoredEvent) => {
+      trackSubagentParent(stored, subagentParents);
+      return shouldPublishShellApplicationEvent(stored, subagentThreadIds);
+    };
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
@@ -1129,6 +1136,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         },
       });
       subagentThreadIds = forSubscriber.subagentThreadIds;
+      subagentParents = forSubscriber.subagentParents;
       const enriched = yield* enrichProjectShells(forSubscriber.snapshot.projects);
       return {
         snapshot: {
@@ -1166,7 +1174,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projectShellItems = Effect.fn("ws.orchestrationV2.projectShellItems")(function* (
       events: ReadonlyArray<ShellApplicationEvent>,
     ) {
-      const coalesced = coalesceShellApplicationEvents(events);
+      const coalesced = coalesceShellApplicationEvents(withSubagentParentRefreshes(events));
+      const subagentCounts = subagentCountsOf(subagentParents);
       const threadIds = coalesced.flatMap((stored) =>
         "aggregateKind" in stored ? [] : [stored.event.threadId],
       );
@@ -1197,7 +1206,10 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
               batchedShells === null
                 ? yield* threadManagement.getThreadShell(threadId)
                 : (batchedShells.get(threadId) ?? null);
-            return shellStreamItemFromThreadShell({ stored, shell });
+            return shellStreamItemFromThreadShell({
+              stored,
+              shell: shell === null ? null : withSubagentCount(shell, subagentCounts),
+            });
           }),
         { concurrency: 8 },
       );
@@ -1305,7 +1317,13 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         return yield* fromSnapshot;
       }
 
-      subagentThreadIds = new Set(yield* threadManagement.listActiveSubagentThreadIds());
+      const subagents = yield* threadManagement.listActiveSubagents();
+      subagentThreadIds = new Set(subagents.map((subagent) => subagent.threadId));
+      subagentParents = new Map(
+        subagents.flatMap((subagent) =>
+          subagent.parentThreadId === null ? [] : [[subagent.threadId, subagent.parentThreadId]],
+        ),
+      );
 
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
       // Read before replying: the range is budgeted above, and a prune pass during the read

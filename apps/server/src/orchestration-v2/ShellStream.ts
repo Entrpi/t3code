@@ -322,10 +322,18 @@ export const loadSubscriberShellSnapshot = Effect.fn("ShellStream.loadSubscriber
       threads: yield* read.decodeThreads,
       snapshotSequence: read.snapshotSequence,
     });
-    const facts = shellTrimFacts(read.index ?? base.threads);
+    const rows = read.index ?? base.threads;
+    const facts = shellTrimFacts(rows);
+    const snapshot = trimShellSnapshot(base, facts, { ...input.options, now: yield* DateTime.now });
+    const subagentParents = subagentParentsOf(rows);
+    const counts = subagentCountsOf(subagentParents);
     return {
-      snapshot: trimShellSnapshot(base, facts, { ...input.options, now: yield* DateTime.now }),
+      snapshot: {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) => withSubagentCount(thread, counts)),
+      },
       subagentThreadIds: facts.subagentThreadIds,
+      subagentParents,
     };
   },
 );
@@ -409,7 +417,79 @@ export type ShellApplicationEvent =
   | {
       readonly sequence: number;
       readonly event: Pick<OrchestrationV2StoredEvent["event"], "threadId">;
+      /** The parent of a subagent this event creates, archives, restores or deletes. */
+      readonly parentThreadId?: ThreadId;
     };
+
+/** The parent whose `subagentCount` a thread lifecycle event changes. */
+function subagentCountParentOf(event: OrchestrationV2StoredEvent["event"]): ThreadId | null {
+  switch (event.type) {
+    case "thread.created":
+    case "thread.archived":
+    case "thread.unarchived":
+    case "thread.deleted":
+      return event.payload.lineage.relationshipToParent === "subagent"
+        ? event.payload.lineage.parentThreadId
+        : null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Each active subagent's parent. A subscription keeps this from its snapshot and the lifecycle
+ * events after it, so parent shells carry `subagentCount` while idle children stay out.
+ */
+export function subagentParentsOf(
+  rows: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
+): Map<string, ThreadId> {
+  const parents = new Map<string, ThreadId>();
+  for (const row of rows) {
+    if (row.lineage.relationshipToParent === "subagent" && row.lineage.parentThreadId !== null) {
+      parents.set(row.id, row.lineage.parentThreadId);
+    }
+  }
+  return parents;
+}
+
+export function trackSubagentParent(
+  stored: ApplicationStoredEvent,
+  parents: Map<string, ThreadId>,
+): void {
+  if ("aggregateKind" in stored) return;
+  const parent = subagentCountParentOf(stored.event);
+  if (parent === null) return;
+  if (stored.event.type === "thread.archived" || stored.event.type === "thread.deleted") {
+    parents.delete(stored.event.threadId);
+  } else {
+    parents.set(stored.event.threadId, parent);
+  }
+}
+
+export function subagentCountsOf(parents: ReadonlyMap<string, ThreadId>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const parent of parents.values()) counts.set(parent, (counts.get(parent) ?? 0) + 1);
+  return counts;
+}
+
+export function withSubagentCount(
+  thread: OrchestrationV2ThreadShell,
+  counts: ReadonlyMap<string, number>,
+): OrchestrationV2ThreadShell {
+  const subagentCount = counts.get(thread.id);
+  return subagentCount === undefined ? thread : { ...thread, subagentCount };
+}
+
+/** Refreshes a subagent's parent after each event that changes the parent's count. */
+export function withSubagentParentRefreshes(
+  events: ReadonlyArray<ShellApplicationEvent>,
+): ReadonlyArray<ShellApplicationEvent> {
+  return events.flatMap((stored) =>
+    "event" in stored && stored.parentThreadId !== undefined
+      ? [stored, { sequence: stored.sequence, event: { threadId: stored.parentThreadId } }]
+      : [stored],
+  );
+}
 
 /** Focused subagents receive these updates through their thread subscription. */
 export function shouldPublishShellApplicationEvent(
@@ -439,14 +519,20 @@ export function shouldPublishShellApplicationEvent(
 
 /** Shell updates refetch an aggregate; drop transcript bodies before retaining an event. */
 export function toShellApplicationEvent(stored: ApplicationStoredEvent): ShellApplicationEvent {
-  return "aggregateKind" in stored
-    ? {
-        aggregateKind: stored.aggregateKind,
-        aggregateId: stored.aggregateId,
-        type: stored.type,
-        sequence: stored.sequence,
-      }
-    : { sequence: stored.sequence, event: { threadId: stored.event.threadId } };
+  if ("aggregateKind" in stored) {
+    return {
+      aggregateKind: stored.aggregateKind,
+      aggregateId: stored.aggregateId,
+      type: stored.type,
+      sequence: stored.sequence,
+    };
+  }
+  const parentThreadId = subagentCountParentOf(stored.event);
+  return {
+    sequence: stored.sequence,
+    event: { threadId: stored.event.threadId },
+    ...(parentThreadId === null ? {} : { parentThreadId }),
+  };
 }
 
 export function coalesceShellApplicationEvents<A extends ShellApplicationEvent>(

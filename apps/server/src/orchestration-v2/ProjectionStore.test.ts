@@ -2243,7 +2243,7 @@ it.effect("SQL snapshot windows keep cards for requests still pending", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("lists only active subagent IDs without loading shell data", () =>
+it.effect("lists only active subagents and their parents without loading shell data", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const sql = yield* SqlClient.SqlClient;
@@ -2261,15 +2261,20 @@ it.effect("lists only active subagent IDs without loading shell data", () =>
         ) VALUES (
           ${id}, 'project:test', ${id}, 'codex', 'full-access', 'default',
           ${createdAt}, ${createdAt}, ${archivedAt}, ${deletedAt},
-          ${JSON.stringify({ lineage: { relationshipToParent: relationship }, archivedAt })}
+          ${JSON.stringify({
+            lineage: {
+              relationshipToParent: relationship,
+              parentThreadId: relationship === null ? null : "parent",
+            },
+            archivedAt,
+          })}
         )
       `;
     }
 
-    assert.sameMembers(
-      [...(yield* store.listActiveSubagentThreadIds())],
-      [ThreadId.make("active-subagent")],
-    );
+    assert.deepStrictEqual(yield* store.listActiveSubagents(), [
+      { threadId: ThreadId.make("active-subagent"), parentThreadId: ThreadId.make("parent") },
+    ]);
   }).pipe(Effect.provide(layerTest)),
 );
 

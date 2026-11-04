@@ -165,6 +165,7 @@ import {
   type ProjectionCheckpointContext,
   type OlderSettledThreadsListing,
   type ActiveShellIndexEntry,
+  type ActiveSubagent,
   type OlderSettledThreadsQuery,
   type ShellSnapshotOptions,
 } from "./ProjectionStore.ts";
@@ -454,8 +455,8 @@ export interface OrchestratorV2Shape {
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>;
-  readonly listActiveSubagentThreadIds: () => Effect.Effect<
-    ReadonlyArray<ThreadId>,
+  readonly listActiveSubagents: () => Effect.Effect<
+    ReadonlyArray<ActiveSubagent>,
     OrchestratorV2Error
   >;
   readonly countThreads: () => Effect.Effect<number, OrchestratorV2Error>;
@@ -14301,13 +14302,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     getShellSnapshot: Effect.fn("OrchestratorV2.getShellSnapshot")(function (options) {
       return projectionStore.getShellSnapshot(options).pipe(Effect.mapError(shellProjectionError));
     }),
-    listActiveSubagentThreadIds: Effect.fn("OrchestratorV2.listActiveSubagentThreadIds")(
-      function () {
-        return projectionStore
-          .listActiveSubagentThreadIds()
-          .pipe(Effect.mapError(shellProjectionError));
-      },
-    ),
+    listActiveSubagents: Effect.fn("OrchestratorV2.listActiveSubagents")(function () {
+      return projectionStore.listActiveSubagents().pipe(Effect.mapError(shellProjectionError));
+    }),
     countThreads: Effect.fn("OrchestratorV2.countThreads")(function () {
       return projectionStore.countThreads().pipe(Effect.mapError(shellProjectionError));
     }),

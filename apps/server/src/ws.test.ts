@@ -321,7 +321,7 @@ it.live.each(["thread", "shell"] as const)(
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           ensureLegacyTranscript: () => Effect.void,
           getShellSnapshot: () => Effect.die("shell resume must not load a full snapshot"),
-          listActiveSubagentThreadIds: () => Effect.succeed([]),
+          listActiveSubagents: () => Effect.succeed([]),
           streamStoredEventsFrom: (
             input: Parameters<
               ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"]
@@ -469,7 +469,7 @@ it.effect("shell groups read distinct threads once and keep each event's own seq
           ),
         ),
         Effect.provideService(ThreadManagement.ThreadManagementService, {
-          listActiveSubagentThreadIds: () => Effect.succeed([]),
+          listActiveSubagents: () => Effect.succeed([]),
           getShellSnapshot: (options?: { readonly threadIds?: ReadonlyArray<string> }) =>
             Effect.suspend(() => {
               shellReads.push(options?.threadIds);
@@ -1204,7 +1204,7 @@ it.effect.each(["thread", "shell"] as const)(
           getThreadSnapshot: () => Effect.die("snapshot"),
           listActiveShellIndex: () => Effect.die("snapshot"),
           readShellSnapshot: () => Effect.die("snapshot"),
-          listActiveSubagentThreadIds: () => Effect.die("replay"),
+          listActiveSubagents: () => Effect.die("replay"),
         } as unknown as ThreadManagement.ThreadManagementService["Service"]),
         Effect.provideService(ProjectStore.ProjectStoreV2, {
           listShells: () => Effect.succeed([]),
@@ -1272,7 +1272,7 @@ it.effect.each(["thread", "shell"] as const)(
           getThreadSnapshot: () => Effect.die("snapshot"),
           listActiveShellIndex: () => Effect.die("snapshot"),
           readShellSnapshot: () => Effect.die("snapshot"),
-          listActiveSubagentThreadIds: () => Effect.succeed([]),
+          listActiveSubagents: () => Effect.succeed([]),
         } as unknown as ThreadManagement.ThreadManagementService["Service"]),
         Effect.provideService(ProjectStore.ProjectStoreV2, {
           listShells: () => Effect.succeed([]),
