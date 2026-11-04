@@ -13,8 +13,12 @@ import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
 import {
+  activeTurnActionLabel,
+  activeTurnSteeringNote,
   alternateComposerDispatchAction,
   resolveComposerDispatchMode,
+  type ActiveTurnComposerAction,
+  type ActiveTurnSteering,
 } from "@t3tools/client-runtime/state/composer-dispatch";
 
 interface PendingActionState {
@@ -32,7 +36,7 @@ interface ComposerPrimaryActionsProps {
   isRunning: boolean;
   canInterrupt: boolean;
   followUpBehavior?: "queue" | "steer";
-  canSteer?: boolean;
+  steering?: ActiveTurnSteering;
   alternateShortcutLabel?: string | null;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
@@ -86,7 +90,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isRunning,
   canInterrupt,
   followUpBehavior = "steer",
-  canSteer = true,
+  steering = "joins",
   alternateShortcutLabel = null,
   showPlanFollowUpPrompt,
   promptHasText,
@@ -112,15 +116,20 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     : undefined;
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const shortcutModifiers = useShortcutModifierState();
-  const isQueuing =
-    !isEditingQueuedMessage &&
-    resolveComposerDispatchMode({
-      running: isRunning,
-      activeTurnDefault: followUpBehavior,
-      canSteer,
-      alternateModifier: shortcutModifiers.metaKey || shortcutModifiers.ctrlKey,
-    }) === "queue";
-  const alternateAction = alternateComposerDispatchAction(followUpBehavior);
+  const runningAction = resolveComposerDispatchMode({
+    running: isRunning,
+    activeTurnDefault: followUpBehavior,
+    steering,
+    alternateModifier: shortcutModifiers.metaKey || shortcutModifiers.ctrlKey,
+  });
+  const isQueuing = !isEditingQueuedMessage && runningAction === "queue";
+  const primaryAction = resolveComposerDispatchMode({
+    running: true,
+    activeTurnDefault: followUpBehavior,
+    steering,
+    alternateModifier: false,
+  }) as ActiveTurnComposerAction;
+  const alternateAction = alternateComposerDispatchAction(followUpBehavior, steering);
   const isSendDisabled = !canOperateThread || sendDisabledReason !== null;
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
 
@@ -280,7 +289,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         : isQueuing
           ? "Queue message"
           : isRunning
-            ? "Steer message"
+            ? activeTurnActionLabel(runningAction as ActiveTurnComposerAction, steering) === "Steer"
+              ? "Steer message"
+              : "Interrupt and send"
             : "Submit message";
   const submitStatus = isEnvironmentUnavailable
     ? "Environment disconnected"
@@ -296,9 +307,15 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     submitStatus ??
     (compactsBeforeSend
       ? `Summarize ${compactTokens} tokens of history, then send`
-      : isRunning && !isEditingQueuedMessage && canSteer
-        ? `Click to ${followUpBehavior}, ${isMacPlatform(navigator.platform) ? "⌘" : "Ctrl"}-click${alternateShortcutLabel ? ` or ${alternateShortcutLabel}` : ""} to ${alternateAction}`
+      : isRunning && !isEditingQueuedMessage
+        ? alternateAction === null
+          ? "Queue message. It runs when this turn ends."
+          : `Click to ${activeTurnActionLabel(primaryAction, steering).toLowerCase()}, ${isMacPlatform(navigator.platform) ? "⌘" : "Ctrl"}-click${alternateShortcutLabel ? ` or ${alternateShortcutLabel}` : ""} to ${activeTurnActionLabel(alternateAction, steering).toLowerCase()}`
         : submitLabel);
+  const steeringNote =
+    submitStatus === null && !compactsBeforeSend && isRunning && !isEditingQueuedMessage
+      ? activeTurnSteeringNote(steering)
+      : null;
 
   const sendButton = (
     <button
@@ -349,7 +366,12 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const submit = (
     <Tooltip key="submit">
       <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
-      <TooltipPopup>{submitTooltip}</TooltipPopup>
+      <TooltipPopup>
+        {submitTooltip}
+        {steeringNote === null ? null : (
+          <span className="block text-muted-foreground">{steeringNote}</span>
+        )}
+      </TooltipPopup>
     </Tooltip>
   );
   if (compactTokens === null) return submit;

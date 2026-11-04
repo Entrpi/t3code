@@ -38,7 +38,7 @@ export function composerCommandKeyHandler(input: {
   readonly sendShortcut: ChatComposerProps["settings"]["sendShortcut"];
   readonly routeKind: ChatComposerProps["routeKind"];
   readonly phase: ChatComposerProps["phase"];
-  readonly isCompacting: boolean;
+  readonly steering: ChatComposerProps["steering"];
   readonly followUpBehavior: ChatComposerProps["settings"]["followUpBehavior"];
   readonly isSoftwareKeyboardOpen: boolean;
   readonly planModeUiEnabled: boolean;
@@ -90,7 +90,7 @@ export function composerCommandKeyHandler(input: {
     sendShortcut,
     routeKind,
     phase,
-    isCompacting,
+    steering,
     followUpBehavior,
     isSoftwareKeyboardOpen,
     planModeUiEnabled,
@@ -249,7 +249,7 @@ export function composerCommandKeyHandler(input: {
           running: phase === "running",
           alternateModifier: submissionIntent === "alternate",
           activeTurnDefault: followUpBehavior,
-          canSteer: !isCompacting,
+          steering,
         }),
         submissionIntent,
       );

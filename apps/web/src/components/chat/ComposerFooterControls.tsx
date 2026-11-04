@@ -4,6 +4,7 @@ import type {
   ProviderInteractionMode,
   RuntimeMode,
 } from "@t3tools/contracts";
+import type { ActiveTurnSteering } from "@t3tools/client-runtime/state/composer-dispatch";
 import { createModelSelection } from "@t3tools/shared/model";
 import { BotIcon, PencilRulerIcon } from "lucide-react";
 import { type ComponentProps, memo, useId, useRef, useState } from "react";
@@ -262,7 +263,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   isRunning: boolean;
   canInterrupt: boolean;
   followUpBehavior: "queue" | "steer";
-  canSteer: boolean;
+  steering: ActiveTurnSteering;
   alternateShortcutLabel: string | null;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
@@ -305,7 +306,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         isRunning={props.isRunning}
         canInterrupt={props.canInterrupt}
         followUpBehavior={props.followUpBehavior}
-        canSteer={props.canSteer}
+        steering={props.steering}
         alternateShortcutLabel={props.alternateShortcutLabel}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}

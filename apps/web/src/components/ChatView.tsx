@@ -86,6 +86,7 @@ import {
   workflowOpeningParentThreadId,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
+  deriveActiveTurnSteering,
   getUserQueuedThreadRuns,
   threadSupportsProviderHandoff,
 } from "@t3tools/client-runtime/state/thread-workflows";
@@ -3603,7 +3604,13 @@ export default function ChatView(props: ChatViewProps) {
                                 isLocalDraftThread && activeProject === null
                               }
                               phase={phase}
-                              isCompacting={isCompacting}
+                              steering={
+                                isCompacting
+                                  ? "none"
+                                  : serverProjection === null
+                                    ? "joins"
+                                    : deriveActiveTurnSteering(serverProjection)
+                              }
                               canInterrupt={canInterruptRunningThread}
                               isSendBusy={
                                 (isSendBusy && !sendQueuesBehindSetup) ||

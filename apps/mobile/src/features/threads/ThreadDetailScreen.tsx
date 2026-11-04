@@ -76,7 +76,10 @@ import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/mod
 import { isProviderNativeSubagentThread } from "@t3tools/contracts";
 import type { QueuedRunEdit } from "../../state/queued-run-edit";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
-import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/composer-dispatch";
+import type {
+  ActiveTurnComposerAction,
+  ActiveTurnSteering,
+} from "@t3tools/client-runtime/state/composer-dispatch";
 import * as Haptics from "expo-haptics";
 import {
   useCallback,
@@ -263,7 +266,7 @@ export interface ThreadDetailScreenProps {
   readonly queuedRunEdit: QueuedRunEdit | null;
   readonly composerDraftKey: string | null;
   readonly followUpBehavior: FollowUpBehavior;
-  readonly canSteerActiveTurn: boolean;
+  readonly activeTurnSteering: ActiveTurnSteering;
   readonly isSavingQueuedEdit: boolean;
   readonly onCancelQueuedRunEdit: () => void;
   readonly onRemoveQueuedEditAttachment: (attachmentId: string) => void;
@@ -1829,7 +1832,7 @@ function ThreadDetailBody(
                             ? "steer"
                             : props.followUpBehavior
                         }
-                        canSteerActiveTurn={props.canSteerActiveTurn}
+                        activeTurnSteering={props.activeTurnSteering}
                         hidden={composerSlotHidden}
                         queuedEdit={
                           props.queuedRunEdit === null
