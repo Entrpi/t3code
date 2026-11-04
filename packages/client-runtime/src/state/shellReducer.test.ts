@@ -420,6 +420,25 @@ describe("applyShellStreamEvents", () => {
     expect(applyShellStreamEvents(seed, [])).toBe(seed);
   });
 
+  it("applies a thread update that shares the cursor's sequence, such as a parent's count refresh", () => {
+    const seed = { ...v2ShellSnapshot, threads: [a, b], snapshotSequence: 4 };
+    const child = update(5, { ...a, title: "Detached" });
+    const parent = update(5, {
+      ...b,
+      subagentCounts: { providerNative: 0, appOwned: 0 },
+    });
+    const sequential = [child, parent].reduce(applyShellStreamEvent, seed);
+    expect(applyShellStreamEvents(seed, [child, parent])).toEqual(sequential);
+    expect(sequential.threads.map((row) => [row.title, row.subagentCounts])).toEqual([
+      ["Detached", undefined],
+      [b.title, { providerNative: 0, appOwned: 0 }],
+    ]);
+    expect(sequential.snapshotSequence).toBe(5);
+    // Removals and project changes at the cursor were already applied.
+    expect(applyShellStreamEvents(sequential, [remove(5, a)])).toBe(sequential);
+    expect(applyShellStreamEvent(sequential, remove(5, a))).toBe(sequential);
+  });
+
   it("does not advance the cursor for an unknown future event", () => {
     const events = [
       { kind: "future.event", sequence: 99 } as never,

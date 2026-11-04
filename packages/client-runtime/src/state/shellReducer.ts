@@ -129,6 +129,14 @@ export function mergeShellSnapshotProjects(
   return { ...next, projects: unchanged ? previous.projects : projects };
 }
 
+/**
+ * Events up to the cursor are applied, except a thread update at the cursor itself: the server
+ * sends a parent's subagent-count refresh with the sequence of the child event that changed it.
+ */
+function isAppliedShellEvent(event: ShellStreamEvent, cursor: number): boolean {
+  return event.sequence < cursor || (event.sequence === cursor && event.kind !== "thread.updated");
+}
+
 export function applyShellStreamEvent(
   snapshot: OrchestrationV2ShellSnapshot,
   event: Exclude<
@@ -136,7 +144,7 @@ export function applyShellStreamEvent(
     { readonly kind: "snapshot" } | { readonly kind: "synchronized" }
   >,
 ): OrchestrationV2ShellSnapshot {
-  if (event.sequence <= snapshot.snapshotSequence) return snapshot;
+  if (isAppliedShellEvent(event, snapshot.snapshotSequence)) return snapshot;
 
   switch (event.kind) {
     case "project.updated": {
@@ -164,7 +172,9 @@ export function applyShellStreamEvent(
           ? snapshot.threads.find((thread) => thread.id === event.thread.id)
           : undefined;
       if (existing !== undefined && sameThreadShell(existing, event.thread)) {
-        return { ...snapshot, snapshotSequence: event.sequence };
+        return event.sequence === snapshot.snapshotSequence
+          ? snapshot
+          : { ...snapshot, snapshotSequence: event.sequence };
       }
       const withoutThread = (threads: OrchestrationV2ShellSnapshot["threads"]) =>
         threads.filter((thread) => thread.id !== event.thread.id);
@@ -234,7 +244,7 @@ export function applyShellStreamEvents(
   const archivedThreads = batchRows(snapshot.archivedThreads);
   let sequence = snapshot.snapshotSequence;
   for (const event of events) {
-    if (event.sequence <= sequence) continue;
+    if (isAppliedShellEvent(event, sequence)) continue;
     switch (event.kind) {
       case "project.updated":
         projects.set(retainRepositoryIdentity(projects.get(event.project.id), event.project));
@@ -264,12 +274,17 @@ export function applyShellStreamEvents(
     }
     sequence = event.sequence;
   }
-  if (sequence === snapshot.snapshotSequence) return snapshot;
-  return {
+  const next = {
     ...snapshot,
     snapshotSequence: sequence,
     projects: projects.finish(),
     threads: threads.finish(),
     archivedThreads: archivedThreads.finish(),
   };
+  return sequence === snapshot.snapshotSequence &&
+    next.projects === snapshot.projects &&
+    next.threads === snapshot.threads &&
+    next.archivedThreads === snapshot.archivedThreads
+    ? snapshot
+    : next;
 }
