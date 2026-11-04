@@ -2140,12 +2140,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 deleted_at = excluded.deleted_at,
                 payload_json = excluded.payload_json
             `;
-              if (visibilityChanges.length > 0) {
-                yield* sql`
-                  DELETE FROM orchestration_v2_message_search WHERE rowid IN (
-                    SELECT rowid FROM orchestration_v2_projection_messages WHERE thread_id = ${event.threadId}
-                  )
-                `;
+              // Search leaves out unlisted threads itself, so only a thread that becomes listed
+              // needs its earlier messages added. Deleting several FTS5 rows writes tombstones
+              // whose rowids pass 2^53, which node:sqlite cannot report as last_insert_rowid.
+              if (visibilityChanges.length > 0 && isListedThreadLineage(event.payload.lineage)) {
                 yield* sql`
                   INSERT INTO orchestration_v2_message_search (rowid, text)
                   SELECT messages.rowid, ${indexedMessageText(sql, "messages.payload_json")}
@@ -2153,6 +2151,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   WHERE messages.thread_id = ${event.threadId}
                     AND ${indexedMessageCondition(sql)}
                     AND json_extract(messages.payload_json, '$.text') IS NOT NULL
+                    AND messages.rowid NOT IN (
+                      SELECT rowid FROM orchestration_v2_message_search
+                      WHERE rowid IN (
+                        SELECT rowid FROM orchestration_v2_projection_messages
+                        WHERE thread_id = ${event.threadId}
+                      )
+                    )
                 `;
               }
               break;

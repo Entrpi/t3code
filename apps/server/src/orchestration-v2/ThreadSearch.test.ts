@@ -422,12 +422,13 @@ it.layer(layerTest)("ThreadSearch", (it) => {
           message(parent, "index-parent", "assistant", "parent answer"),
           thread(subagent, project, { subagentOf: parent }),
           message(subagent, "index-subagent", "assistant", "subagent answer"),
+          message(subagent, "index-subagent-again", "assistant", "another subagent answer"),
         ],
         projections.apply,
         { discard: true },
       );
       const indexedThreads = sql<{ readonly threadId: string }>`
-        SELECT messages.thread_id AS "threadId"
+        SELECT DISTINCT messages.thread_id AS "threadId"
         FROM orchestration_v2_message_search AS search
         INNER JOIN orchestration_v2_projection_messages AS messages
           ON messages.rowid = search.rowid
@@ -453,9 +454,22 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       yield* projections.apply(
         message(subagent, "index-streaming", "assistant", "streaming", { streaming: true }),
       );
+      const search = yield* ThreadSearch.ThreadSearch;
+      const subagentRows = sql<{ readonly n: number }>`
+        SELECT count(*) AS n FROM orchestration_v2_message_search
+        WHERE rowid IN (
+          SELECT rowid FROM orchestration_v2_projection_messages WHERE thread_id = ${subagent}
+        )
+      `.pipe(Effect.map(([row]) => row?.n ?? 0));
       const child = yield* projections.getThread(subagent);
       for (const type of ["thread.detached", "thread.reattached", "thread.pinned"] as const) {
         const attached = type === "thread.reattached";
+        // Deleting several rows from a merged segment would write FTS5 tombstones, whose
+        // rowids pass 2^53 and leave last_insert_rowid out of a JavaScript number's range.
+        yield* sql`
+          INSERT INTO orchestration_v2_message_search (orchestration_v2_message_search)
+          VALUES ('optimize')
+        `;
         yield* projections.apply({
           id: EventId.make(`event:index:${type}`),
           type,
@@ -473,10 +487,12 @@ it.layer(layerTest)("ThreadSearch", (it) => {
                 },
           },
         });
-        assert.deepEqual(
-          (yield* indexedThreads).toSorted(),
-          attached ? [parent] : [parent, subagent].toSorted(),
+        // Search leaves out subagent threads itself, so reattaching keeps their rows.
+        assert.lengthOf(
+          (yield* search.search({ query: "another subagent answer" })).matches,
+          attached ? 0 : 1,
         );
+        assert.strictEqual(yield* subagentRows, 2);
       }
     }),
   );
