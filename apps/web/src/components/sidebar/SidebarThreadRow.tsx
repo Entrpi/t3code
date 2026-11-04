@@ -541,12 +541,22 @@ const LINEAGE_LINK_CLASS_NAME: Record<SidebarLineageLink, string> = {
   last: "before:absolute before:start-4.5 before:top-0 before:bottom-1 before:w-px before:bg-border",
 };
 
+// The card list item clips overflow, so the line runs just inside the cards' edge, above their
+// fill, from the first card's top line to the last card's.
+const CARD_LINEAGE_LINK_CLASS_NAME: Record<SidebarLineageLink, string> = {
+  first:
+    "relative before:absolute before:start-1 before:top-5 before:bottom-0 before:z-10 before:w-px before:bg-border",
+  middle:
+    "relative before:absolute before:start-1 before:inset-y-0 before:z-10 before:w-px before:bg-border",
+  last: "relative before:absolute before:start-1 before:top-0 before:h-5 before:z-10 before:w-px before:bg-border",
+};
+
 type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
-  // Where a folder row sits in a fork lineage of two or more, for the connector line.
+  // Where an Active row sits in a fork lineage of two or more, for the connector line.
   lineageLink: SidebarLineageLink | null;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
@@ -1413,6 +1423,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
         metaLineEmpty && "[contain-intrinsic-size:auto_58px]",
+        props.lineageLink !== null && CARD_LINEAGE_LINK_CLASS_NAME[props.lineageLink],
         sortable?.isDragging && "relative z-20",
       )}
     >

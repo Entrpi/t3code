@@ -148,6 +148,15 @@ choice.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
 
+### Keep forks together
+
+Turn on **Settings → General → Keep forks together** on web and desktop, or right-click the
+project filter button at the top of the sidebar, to show a thread and its forks next to each
+other in the active list, joined by a line. The group sits where the highest of them would be on
+its own. Dragging any thread in the group moves the whole group, and you cannot drop another
+thread inside it. Pinned, snoozed, and settled threads stay in their own sections. Each device
+keeps its own choice.
+
 ### Group threads by project (beta)
 
 Turn on **Settings → Labs → Boring sidebar (group by project)** on web and desktop to put active

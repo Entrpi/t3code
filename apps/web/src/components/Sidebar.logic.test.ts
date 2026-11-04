@@ -1460,6 +1460,45 @@ describe("Working shelf (beta)", () => {
         unsnooze: false,
       });
     });
+
+    it("moves a fork lineage as one block and keeps other rows out of it", () => {
+      const activeKeysById = new Map([
+        ["root", "c"],
+        ["fork", "f"],
+        ["x", "m"],
+        ["y", "t"],
+      ]);
+      const plan = (activeKey: string, activeOrder: string[]) =>
+        planSidebarThreadDrop({
+          activeKey,
+          activeSection: "active",
+          target: { section: "active", pinnedOrder: [], activeOrder },
+          pinnedOrder: [],
+          pinnedKeysById: new Map(),
+          activeOrder: ["root", "fork", "x", "y"],
+          activeKeysById,
+          activeLineageByKey: new Map([
+            ["root", "lineage"],
+            ["fork", "lineage"],
+          ]),
+        });
+      const orderAfter = (result: ReturnType<typeof plan>) => {
+        const keys = new Map(activeKeysById);
+        if (result.kind === "move-active") {
+          for (const { id, orderKey } of result.assignments) keys.set(id, orderKey);
+        }
+        return [...keys].toSorted(([, a], [, b]) => (a < b ? -1 : 1)).map(([id]) => id);
+      };
+
+      const carried = plan("fork", ["root", "x", "y", "fork"]);
+      expect(carried).toMatchObject({ kind: "move-active", order: ["x", "y", "root", "fork"] });
+      expect(orderAfter(carried)).toEqual(["x", "y", "root", "fork"]);
+
+      const reordered = plan("fork", ["fork", "root", "x", "y"]);
+      expect(orderAfter(reordered)).toEqual(["fork", "root", "x", "y"]);
+
+      expect(plan("x", ["root", "x", "fork", "y"])).toEqual({ kind: "none" });
+    });
   });
 });
 

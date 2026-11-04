@@ -366,6 +366,40 @@ export function resolveSidebarReorderableThreadKeys(input: {
   return { draggableThreadKeys, activeReorderableThreadKeys };
 }
 
+/**
+ * Keeps fork lineages whole: a row dropped outside its own lineage brings the rest of it along,
+ * in their order before the drag, and no row lands between two rows of another lineage.
+ */
+function keepSidebarLineagesTogether(input: {
+  readonly targetOrder: readonly string[];
+  readonly previousOrder: readonly string[];
+  readonly activeKey: string;
+  readonly lineageByKey: ReadonlyMap<string, string>;
+}): { readonly order: readonly string[]; readonly moved: readonly string[] } | null {
+  const { targetOrder, activeKey, lineageByKey } = input;
+  const lineageAt = (index: number) => {
+    const key = targetOrder[index];
+    return key === undefined ? undefined : lineageByKey.get(key);
+  };
+  const index = targetOrder.indexOf(activeKey);
+  const own = lineageByKey.get(activeKey);
+  const before = lineageAt(index - 1);
+  if (before !== undefined && before !== own && before === lineageAt(index + 1)) return null;
+  if (own === undefined) return { order: targetOrder, moved: [activeKey] };
+  const at = targetOrder.flatMap((key, i) => (lineageByKey.get(key) === own ? [i] : []));
+  const span = at[at.length - 1]! - at[0]!;
+  if (span === at.length - 1) {
+    return { order: targetOrder, moved: [activeKey] };
+  }
+  const lineage = input.previousOrder.filter((key) => lineageByKey.get(key) === own);
+  return {
+    order: targetOrder.flatMap((key) =>
+      key === activeKey ? lineage : lineageByKey.get(key) === own ? [] : [key],
+    ),
+    moved: lineage,
+  };
+}
+
 export function planSidebarThreadDrop(input: {
   readonly activeKey: string;
   readonly activeSection: SidebarSection;
@@ -380,6 +414,8 @@ export function planSidebarThreadDrop(input: {
   readonly activeKeysById: ReadonlyMap<string, string | null | undefined>;
   readonly activeReorderableKeys?: ReadonlySet<string>;
   readonly activeTimeOrdered?: boolean;
+  /** Each Active row's fork lineage, for rows in a lineage of two or more kept together. */
+  readonly activeLineageByKey?: ReadonlyMap<string, string> | undefined;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -398,18 +434,40 @@ export function planSidebarThreadDrop(input: {
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
+  // A moved block is placed one row at a time, each after the rows already placed.
+  const reorder = (
+    orderedIds: readonly string[],
+    keysById: ReadonlyMap<string, string | null | undefined>,
+    movedIds: readonly string[],
+  ) => {
+    const keys = new Map(keysById);
+    const assigned = new Map<string, string>();
+    movedIds.forEach((movedId, index) => {
+      const pending = new Set(movedIds.slice(index + 1));
+      for (const { id, orderKey } of planPinnedReorder({
+        orderedIds: orderedIds.filter((id) => !pending.has(id)),
+        keysById: keys,
+        movedId,
+      })) {
+        keys.set(id, orderKey);
+        assigned.set(id, orderKey);
+      }
+    });
+    return [...assigned].map(([id, orderKey]) => ({ id, orderKey }));
+  };
   const arrange = (
     order: readonly string[],
     keysById: ReadonlyMap<string, string | null | undefined>,
     writable: ReadonlySet<string> | undefined,
+    movedIds: readonly string[] = [activeKey],
   ) => {
-    if (!writable) return planPinnedReorder({ orderedIds: order, keysById, movedId: activeKey });
+    if (!writable) return reorder(order, keysById, movedIds);
     if (!writable.has(activeKey)) return null;
-    const assignments = planPinnedReorder({
-      orderedIds: order.filter((key) => writable.has(key) || keysById.get(key) != null),
+    const assignments = reorder(
+      order.filter((key) => writable.has(key) || keysById.get(key) != null),
       keysById,
-      movedId: activeKey,
-    });
+      movedIds,
+    );
     if (assignments.some(({ id }) => !writable.has(id))) return null;
 
     // Keyless Active rows sort before keyed rows; keyless Pinned rows sort after them.
@@ -447,7 +505,17 @@ export function planSidebarThreadDrop(input: {
               unsnooze: activeSection === "snoozed",
             };
       }
-      const order = target.activeOrder;
+      const kept =
+        input.activeLineageByKey === undefined
+          ? { order: target.activeOrder, moved: [activeKey] }
+          : keepSidebarLineagesTogether({
+              targetOrder: target.activeOrder,
+              previousOrder: activeOrder,
+              activeKey,
+              lineageByKey: input.activeLineageByKey,
+            });
+      if (kept === null) return { kind: "none" };
+      const { order } = kept;
       if (
         activeSection === "active" &&
         order.length === activeOrder.length &&
@@ -455,7 +523,7 @@ export function planSidebarThreadDrop(input: {
       ) {
         return { kind: "none" };
       }
-      const assignments = arrange(order, activeKeysById, activeReorderableKeys);
+      const assignments = arrange(order, activeKeysById, activeReorderableKeys, kept.moved);
       if (assignments === null) return { kind: "none" };
       return {
         kind: "move-active",
@@ -992,6 +1060,14 @@ export function groupSidebarThreadsByProject<
 
 export type SidebarLineageLink = "first" | "middle" | "last";
 
+export function sidebarLineageKey(
+  thread: Pick<SidebarThreadSummary, "environmentId"> & {
+    readonly lineage: Pick<SidebarThreadSummary["lineage"], "rootThreadId">;
+  },
+): string {
+  return `${thread.environmentId}:${thread.lineage.rootThreadId}`;
+}
+
 /**
  * Pulls each fork lineage together at its first member's place, keeping the input order
  * inside it, and says where each row of a lineage of two or more sits for the connector.
@@ -1003,7 +1079,7 @@ export function clusterSidebarThreadsByLineage<
 >(threads: readonly TThread[]): { threads: TThread[]; links: Map<TThread, SidebarLineageLink> } {
   const lineages = new Map<string, TThread[]>();
   for (const thread of threads) {
-    const key = `${thread.environmentId}:${thread.lineage.rootThreadId}`;
+    const key = sidebarLineageKey(thread);
     const lineage = lineages.get(key);
     if (lineage === undefined) lineages.set(key, [thread]);
     else lineage.push(thread);

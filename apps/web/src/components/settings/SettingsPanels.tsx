@@ -483,6 +483,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
       : []),
+    ...(settings.sidebarKeepForksTogether !== DEFAULT_UNIFIED_SETTINGS.sidebarKeepForksTogether
+      ? ["Keep forks together"]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -652,6 +655,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarKeepForksTogether: DEFAULT_UNIFIED_SETTINGS.sidebarKeepForksTogether,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -905,6 +909,32 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label="Working section"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("keep-forks-together")}
+          description="Show a thread and its forks together in the sidebar, joined by a line. The boring sidebar in Labs always does. Right-click the project filter to switch it from the sidebar."
+          resetAction={
+            settings.sidebarKeepForksTogether !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarKeepForksTogether ? (
+              <SettingResetButton
+                label="keep forks together"
+                onClick={() =>
+                  updateSettings({
+                    sidebarKeepForksTogether: DEFAULT_UNIFIED_SETTINGS.sidebarKeepForksTogether,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarKeepForksTogether}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarKeepForksTogether: Boolean(checked) })
+              }
+              aria-label="Keep forks together"
             />
           }
         />

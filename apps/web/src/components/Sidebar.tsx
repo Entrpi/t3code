@@ -133,7 +133,11 @@ import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useBoringSidebarEnabled, useClientSettings } from "../hooks/useSettings";
+import {
+  updateClientSettings,
+  useBoringSidebarEnabled,
+  useClientSettings,
+} from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -182,6 +186,7 @@ import {
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   clusterSidebarThreadsByLineage,
+  sidebarLineageKey,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -444,6 +449,8 @@ function useSidebarThreads(input: {
   // Folders already separate the work, so boring mode has no Working shelf.
   const workingShelfEnabled =
     useClientSettings((s) => s.sidebarWorkingShelfEnabled) && folderGroups === null;
+  const keepForksTogether =
+    useClientSettings((s) => s.sidebarKeepForksTogether) && folderGroups === null;
   const environmentConnections = useEnvironmentConnectionSummaries();
   const liveShellEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
   const disconnectedEnvironmentIds = new Set(
@@ -504,8 +511,18 @@ function useSidebarThreads(input: {
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
 
-  const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
-    partition;
+  const { pinnedThreads, workingThreads, snoozedThreads, settledThreads } = partition;
+  const lineageLinkByKey = new Map<string, SidebarLineageLink>();
+  // Project folders cluster their own threads below.
+  const flatLineages = keepForksTogether
+    ? clusterSidebarThreadsByLineage(partition.activeThreads)
+    : null;
+  const activeThreads = flatLineages?.threads ?? partition.activeThreads;
+  const activeLineageByKey = new Map<string, string>();
+  for (const [thread, link] of flatLineages?.links ?? []) {
+    lineageLinkByKey.set(threadShellKey(thread), link);
+    activeLineageByKey.set(threadShellKey(thread), sidebarLineageKey(thread));
+  }
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
@@ -538,7 +555,6 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
-  const lineageLinkByKey = new Map<string, SidebarLineageLink>();
   const projectFolders =
     folderGroups === null
       ? null
@@ -586,6 +602,7 @@ function useSidebarThreads(input: {
   }
   return {
     ...partition,
+    activeThreads,
     threads,
     workingShelfEnabled,
     searchableThreads: [
@@ -612,6 +629,7 @@ function useSidebarThreads(input: {
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
     projectFolders,
     lineageLinkByKey,
+    activeLineageByKey: flatLineages === null ? undefined : activeLineageByKey,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
@@ -1019,6 +1037,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const boringSidebarEnabled = useBoringSidebarEnabled();
   const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
+  const keepForksTogether = useClientSettings((settings) => settings.sidebarKeepForksTogether);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
@@ -1275,6 +1294,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (isMobile) setOpenMobile(false);
     void handleNewThread(scopeProjectRef(group.environmentId, group.id));
   });
+  const handleProjectScopeContextMenu = useStableCallback((event: ReactMouseEvent) => {
+    const api = readLocalApi();
+    // Project folders always keep forks together.
+    if (!api || boringSidebarEnabled) return;
+    event.preventDefault();
+    void (async () => {
+      const clicked = await settlePromise(() =>
+        api.contextMenu.show(
+          [{ id: "keep-forks-together", label: "Keep forks together", checked: keepForksTogether }],
+          { x: event.clientX, y: event.clientY },
+        ),
+      );
+      if (clicked._tag === "Success" && clicked.value === "keep-forks-together") {
+        void updateClientSettings({ sidebarKeepForksTogether: !keepForksTogether });
+      }
+    })();
+  });
   const handleProjectFolderContextMenu = useStableCallback(
     (group: SidebarProjectSnapshot, position: { x: number; y: number }) => {
       const api = readLocalApi();
@@ -1341,6 +1377,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleWorkingShelf,
     projectFolders,
     lineageLinkByKey,
+    activeLineageByKey,
     toggleProjectFolder,
     renderedSettledThreads,
     visibleSnoozedThreads,
@@ -2080,6 +2117,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
             activeTimeOrdered: workingShelfEnabled,
+            activeLineageByKey,
           }).kind !== "none"
         );
       },
@@ -2113,6 +2151,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       activeKeysById,
       activeReorderableKeys: activeReorderableThreadKeys,
       activeTimeOrdered: workingShelfEnabled,
+      activeLineageByKey,
     });
     if (plan.kind === "none") return;
     if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
@@ -3042,6 +3081,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   }}
                 >
                   <ComboboxTrigger
+                    onContextMenu={handleProjectScopeContextMenu}
                     render={
                       <SidebarHeaderIconButton
                         label={
@@ -3347,9 +3387,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
-                            lineageLink={
-                              folderRow ? (lineageLinkByKey.get(threadKey) ?? null) : null
-                            }
+                            lineageLink={lineageLinkByKey.get(threadKey) ?? null}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
