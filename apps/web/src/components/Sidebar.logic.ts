@@ -990,6 +990,34 @@ export function groupSidebarThreadsByProject<
   return folders.filter((folder) => folder.threads.length > 0 || keepEmpty(folder.group));
 }
 
+export type SidebarLineageLink = "first" | "middle" | "last";
+
+/**
+ * Pulls each fork lineage together at its first member's place, keeping the input order
+ * inside it, and says where each row of a lineage of two or more sits for the connector.
+ */
+export function clusterSidebarThreadsByLineage<
+  TThread extends Pick<SidebarThreadSummary, "environmentId"> & {
+    readonly lineage: Pick<SidebarThreadSummary["lineage"], "rootThreadId">;
+  },
+>(threads: readonly TThread[]): { threads: TThread[]; links: Map<TThread, SidebarLineageLink> } {
+  const lineages = new Map<string, TThread[]>();
+  for (const thread of threads) {
+    const key = `${thread.environmentId}:${thread.lineage.rootThreadId}`;
+    const lineage = lineages.get(key);
+    if (lineage === undefined) lineages.set(key, [thread]);
+    else lineage.push(thread);
+  }
+  const links = new Map<TThread, SidebarLineageLink>();
+  for (const lineage of lineages.values()) {
+    if (lineage.length < 2) continue;
+    lineage.forEach((thread, index) =>
+      links.set(thread, index === 0 ? "first" : index === lineage.length - 1 ? "last" : "middle"),
+    );
+  }
+  return { threads: [...lineages.values()].flat(), links };
+}
+
 export type SidebarV2TopStatusKind =
   | "approval"
   | "done"

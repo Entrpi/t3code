@@ -34,6 +34,7 @@ import {
   type SidebarSection,
   resolveSidebarDropVerb,
   groupSidebarThreadsByProject,
+  clusterSidebarThreadsByLineage,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
 } from "./Sidebar.logic";
@@ -1613,6 +1614,36 @@ describe("groupSidebarThreadsByProject", () => {
     expect(summarize((group) => group.projectKey === "fleet")).toEqual([
       { projectKey: "t3code", threads: ["a", "b"] },
       { projectKey: "fleet", threads: [] },
+    ]);
+  });
+});
+
+describe("clusterSidebarThreadsByLineage", () => {
+  it("pulls forks to their most recent member, newest first, and links groups of two or more", () => {
+    const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+    const thread = (id: string, root: string, environmentId = localEnvironmentId) => ({
+      id,
+      environmentId,
+      lineage: { rootThreadId: ThreadId.make(root) },
+    });
+    // Newest first, as folders sort by the latest send.
+    const threads = [
+      thread("fork-2", "root"),
+      thread("solo", "solo"),
+      thread("root", "root"),
+      thread("other-machine", "root", remoteEnvironmentId),
+      thread("fork-1", "root"),
+    ];
+
+    const { threads: clustered, links } = clusterSidebarThreadsByLineage(threads);
+
+    expect(clustered.map((entry) => [entry.id, links.get(entry) ?? null])).toEqual([
+      ["fork-2", "first"],
+      ["root", "middle"],
+      ["fork-1", "last"],
+      ["solo", null],
+      // A root id names a thread on one environment only.
+      ["other-machine", null],
     ]);
   });
 });

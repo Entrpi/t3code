@@ -181,6 +181,7 @@ import {
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
+  clusterSidebarThreadsByLineage,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -211,6 +212,7 @@ import {
   sortWorkingThreadsBySend,
   useSnoozeWakeClock,
   useThreadJumpHintsVisible,
+  type SidebarLineageLink,
   type SidebarListItem,
   type SidebarSection,
   resolveSidebarRowThreadId,
@@ -536,6 +538,7 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
+  const lineageLinkByKey = new Map<string, SidebarLineageLink>();
   const projectFolders =
     folderGroups === null
       ? null
@@ -544,13 +547,19 @@ function useSidebarThreads(input: {
             projectExpandedById,
             sidebarFolderExpansionKeys(folder.group),
           );
+          const lineages = clusterSidebarThreadsByLineage(folder.threads);
+          if (!collapsed) {
+            for (const [thread, link] of lineages.links) {
+              lineageLinkByKey.set(threadShellKey(thread), link);
+            }
+          }
           return {
             group: folder.group,
             collapsed,
             // A closed folder still shows the open thread, and hints at the rest.
             threads: collapsed
               ? routeThreadOnly(folder.threads, routeRowThreadKey)
-              : folder.threads,
+              : lineages.threads,
             hiddenThreads: collapsed
               ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
               : EMPTY_THREADS,
@@ -602,6 +611,7 @@ function useSidebarThreads(input: {
     workingShelfExpanded,
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
     projectFolders,
+    lineageLinkByKey,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
@@ -1330,6 +1340,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     workingShelfExpanded,
     toggleWorkingShelf,
     projectFolders,
+    lineageLinkByKey,
     toggleProjectFolder,
     renderedSettledThreads,
     visibleSnoozedThreads,
@@ -3336,6 +3347,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
+                            lineageLink={
+                              folderRow ? (lineageLinkByKey.get(threadKey) ?? null) : null
+                            }
                             navigationParent={
                               folderRow ??
                               (section === "working" ||

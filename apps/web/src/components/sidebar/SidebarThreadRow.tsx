@@ -79,6 +79,7 @@ import {
   hasUnseenCompletion,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
+  type SidebarLineageLink,
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
   shouldRecedeSidebarThread,
@@ -532,11 +533,21 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
   return <Icon aria-hidden className={cn("shrink-0", props.className)} />;
 }
 
+// Runs under the folder icon, from just inside a lineage's first row to just inside its last.
+const LINEAGE_LINK_CLASS_NAME: Record<SidebarLineageLink, string> = {
+  first:
+    "before:absolute before:start-4.5 before:top-1 before:bottom-0 before:w-px before:bg-border",
+  middle: "before:absolute before:start-4.5 before:inset-y-0 before:w-px before:bg-border",
+  last: "before:absolute before:start-4.5 before:top-0 before:bottom-1 before:w-px before:bg-border",
+};
+
 type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
+  // Where a folder row sits in a fork lineage of two or more, for the connector line.
+  lineageLink: SidebarLineageLink | null;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1228,6 +1239,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     : "flex h-9 items-center gap-2.5 px-2.5",
                   // Lines titles up with the folder name, past its chevron and icon.
                   inFolder && "ps-9",
+                  props.lineageLink !== null && LINEAGE_LINK_CLASS_NAME[props.lineageLink],
                 )}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
