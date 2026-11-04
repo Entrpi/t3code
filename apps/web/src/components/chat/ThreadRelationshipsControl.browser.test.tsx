@@ -160,7 +160,7 @@ it.each([
   }
 });
 
-it("opens an idle child from Lineage when its shell has not been loaded", async () => {
+it("lists an idle subsession apart from previous agents and opens it before its shell loads", async () => {
   setup();
   const projection = makeThreadProjectionFixture();
   const childId = ThreadId.make("omitted-child");
@@ -199,7 +199,10 @@ it("opens an idle child from Lineage when its shell has not been loaded", async 
       showSideChats
     />,
   );
-  await screen.getByRole("button", { name: /Previous agents/ }).click();
+  // A finished subsession is a child session, not one of the previous agents.
+  await expect
+    .element(screen.getByRole("button", { name: /Previous agents/ }))
+    .not.toBeInTheDocument();
   const child = screen.getByRole("button", { name: /Idle child/ });
   await expect.element(child).toBeEnabled();
   await child.click();

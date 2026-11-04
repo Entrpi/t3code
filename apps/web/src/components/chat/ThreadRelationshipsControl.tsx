@@ -31,6 +31,7 @@ import {
 import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
+  isSubsessionThread,
   NodeId,
   type EnvironmentId,
   type OrchestrationV2DelegatedFrom,
@@ -48,6 +49,7 @@ import {
   ArrowRightIcon,
   BotIcon,
   ChevronDownIcon,
+  CornerDownRightIcon,
   CornerLeftUpIcon,
   GitForkIcon,
   MessagesSquareIcon,
@@ -374,7 +376,7 @@ function DelegatedFromRow(props: {
             hint={
               environment === null
                 ? `Delegated from ${label ?? "a linked environment"}. Connect to it to open the parent thread.`
-                : "Open parent agent"
+                : "Open parent session"
             }
           />
         </TooltipPopup>
@@ -503,6 +505,14 @@ export function ThreadRelationshipsPanel(props: {
         ? row
         : { ...row, edge: { ...row.edge, status: workflowGroup.workflow.status } };
     });
+  // Subsessions are child sessions, listed apart from the agents that ran inside a turn.
+  const isSubsessionRow = ({ threadId, edge }: ThreadRelationshipWalkRow) => {
+    if (edge.kind !== "subagent" || isParentThreadRelationship(edge, props.threadId)) return false;
+    const thread = graph.nodes.get(threadId)?.thread;
+    return thread
+      ? isSubsessionThread(thread)
+      : subagentsByThreadId.get(threadId)?.origin === "app_owned";
+  };
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const unlistedThreadIds = relationshipRows
     .filter(
@@ -533,14 +543,17 @@ export function ThreadRelationshipsPanel(props: {
 
   const {
     related = [],
+    subsessions = [],
     active = [],
     previous = [],
     sideChats = [],
-  } = groupBy(visibleRelationships, ({ threadId, edge }) => {
+  } = groupBy(visibleRelationships, (row) => {
+    const { threadId, edge } = row;
     const isParent = isParentThreadRelationship(edge, props.threadId);
     if (!isParent && graph.nodes.get(threadId)?.thread?.lineage.sideChat === true)
       return "sideChats";
     if (edge.kind !== "subagent" || isParent) return "related";
+    if (isSubsessionRow(row)) return "subsessions";
     return ["completed", "failed", "error", "cancelled", "interrupted", "idle"].includes(
       edge.status ?? "",
     )
@@ -549,6 +562,7 @@ export function ThreadRelationshipsPanel(props: {
   });
   const groups = [
     { id: "related", label: null, rows: related, expanded: true },
+    { id: "subsessions", label: null, rows: subsessions, expanded: true },
     { id: "active", label: null, rows: active, expanded: true },
     { id: "previous", label: "Previous agents", rows: previous, expanded: false },
   ];
@@ -560,7 +574,8 @@ export function ThreadRelationshipsPanel(props: {
   const runningCount =
     (projection?.subagents.filter(
       (agent) => agent.childThreadId === null && agent.status === "running",
-    ).length ?? 0) + active.filter(({ edge }) => edge.status === "running").length;
+    ).length ?? 0) +
+    [...subsessions, ...active].filter(({ edge }) => edge.status === "running").length;
 
   // A linked environment's agent may have delegated this thread from there.
   const delegatedFrom = currentThread?.delegatedFrom;
@@ -568,6 +583,7 @@ export function ThreadRelationshipsPanel(props: {
   const lineageVisible =
     props.showLineage &&
     (related.length > 0 ||
+      subsessions.length > 0 ||
       active.length > 0 ||
       previous.length > 0 ||
       runningCount > 0 ||
@@ -673,9 +689,11 @@ export function ThreadRelationshipsPanel(props: {
         ? null
         : (graph.nodes.get(mergeTargetThreadId)?.thread?.title ?? null);
 
-  const renderRelationshipRow = ({ threadId, edge }: ThreadRelationshipWalkRow) => {
+  const renderRelationshipRow = (row: ThreadRelationshipWalkRow) => {
+    const { threadId, edge } = row;
     const node = graph.nodes.get(threadId);
     const isSubagent = edge.kind === "subagent";
+    const isSubsession = isSubsessionRow(row);
     const isMergeTarget = threadId === mergeTargetThreadId;
     const isParent = isParentThreadRelationship(edge, props.threadId);
     const rowStatus =
@@ -684,17 +702,23 @@ export function ThreadRelationshipsPanel(props: {
         : undefined) ?? threadRelationshipRowStatus(graph, { threadId, edge });
     const RelationshipIcon = isParent
       ? CornerLeftUpIcon
-      : isSubagent
-        ? BotIcon
-        : edge.kind === "detached"
-          ? UnlinkIcon
-          : node?.thread?.lineage.sideChat === true
-            ? MessagesSquareIcon
-            : GitForkIcon;
+      : isSubsession
+        ? CornerDownRightIcon
+        : isSubagent
+          ? BotIcon
+          : edge.kind === "detached"
+            ? UnlinkIcon
+            : node?.thread?.lineage.sideChat === true
+              ? MessagesSquareIcon
+              : GitForkIcon;
     const relationship =
       node?.thread?.lineage.sideChat === true && !isParent
         ? "Side chat"
-        : relationshipLabel(edge, props.threadId);
+        : isSubsession
+          ? "Subsession"
+          : isParent && isSubagent && currentThread && isSubsessionThread(currentThread)
+            ? "Parent session"
+            : relationshipLabel(edge, props.threadId);
     const projectedAgent = isSubagent && !isParent ? subagentsByThreadId.get(threadId) : undefined;
     const workflowGroup =
       projectedAgent === undefined ? undefined : workflowGroupsById.get(projectedAgent.id);
@@ -764,7 +788,7 @@ export function ThreadRelationshipsPanel(props: {
     const relationshipContent = (
       <>
         <ThreadRelationshipIcon
-          driver={isSubagent && !isParent ? providerDriver : undefined}
+          driver={isSubagent && !isParent && !isSubsession ? providerDriver : undefined}
           provider={provider}
           providerEntries={providerEntries}
           fallbackIcon={RelationshipIcon}
@@ -903,7 +927,7 @@ export function ThreadRelationshipsPanel(props: {
                     variant="ghost"
                     part="icon"
                     tone="destructive"
-                    aria-label={`Stop subagent ${threadTitle}`}
+                    aria-label={`Stop ${isSubsession ? "subsession" : "subagent"} ${threadTitle}`}
                     disabled={stoppingId !== null}
                     onClick={() => void stopSubagent(threadId, agent)}
                   />
@@ -915,7 +939,9 @@ export function ThreadRelationshipsPanel(props: {
                   <SquareIcon aria-hidden className="size-3 fill-current" />
                 )}
               </TooltipTrigger>
-              <TooltipPopup side="left">Stop subagent</TooltipPopup>
+              <TooltipPopup side="left">
+                {isSubsession ? "Stop subsession" : "Stop subagent"}
+              </TooltipPopup>
             </Tooltip>
           </div>
         ) : null}
@@ -934,6 +960,7 @@ export function ThreadRelationshipsPanel(props: {
             runningCount > 0 ||
             canDetach ||
             related.length > 0 ||
+            subsessions.length > 0 ||
             active.length > 0 ||
             delegatedFrom !== undefined
           }
