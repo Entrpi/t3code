@@ -102,15 +102,13 @@ export function resolveMessageDispatchIntent(
   if (targetMessage !== undefined && isNativeMaintenanceCommand(targetMessage)) {
     return { type: "queue_after_active" };
   }
-  // A provider that can neither steer nor restart its turn takes the message after the turn.
+  // A steer never interrupts: a provider that cannot add to its running turn takes the message
+  // after it. Interrupting and restarting is its own explicit `restart` intent.
   const turns =
     target === undefined || !isActiveRun(target)
       ? undefined
       : providerTurnCapabilities(projection, target);
-  return turns !== undefined &&
-    !turns.supportsActiveSteering &&
-    !(turns.supportsInterrupt && turns.supportsSteeringByInterruptRestart) &&
-    turns.supportsQueuedMessages
+  return turns !== undefined && !turns.supportsActiveSteering && turns.supportsQueuedMessages
     ? { type: "queue_after_active" }
     : mode;
 }

@@ -74,7 +74,7 @@ import { assertClaudeMessageSteeringOutput } from "./message_steering/claude_out
 import { assertMessageSteeringOutput } from "./message_steering/codex_output.ts";
 import { assertCursorMessageSteeringOutput } from "./message_steering/cursor_output.ts";
 import { assertGrokMessageSteeringOutput } from "./message_steering/grok_output.ts";
-import { messageSteeringInput } from "./message_steering/input.ts";
+import { messageRestartInput, messageSteeringInput } from "./message_steering/input.ts";
 import { assertPiMessageSteeringOutput } from "./message_steering/pi_output.ts";
 import { MUSE_PERMISSION_DECLINED_FILE, musePermissionInput } from "./muse_permission/input.ts";
 import { assertMusePermissionOutput } from "./muse_permission/output.ts";
@@ -1765,24 +1765,28 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         driver: ProviderDriverKind.make("cursor"),
         transcriptFile: new URL("./message_steering/cursor_transcript.ndjson", import.meta.url),
         modelSelection: CURSOR_MODEL_SELECTION,
+        buildInput: messageRestartInput,
         assertOutput: assertCursorMessageSteeringOutput,
       },
       {
         driver: ProviderDriverKind.make("grok"),
         transcriptFile: new URL("./message_steering/grok_transcript.ndjson", import.meta.url),
         modelSelection: GROK_MODEL_SELECTION,
+        buildInput: messageRestartInput,
         assertOutput: assertGrokMessageSteeringOutput,
       },
       {
         driver: ProviderDriverKind.make("fx"),
         transcriptFile: new URL("./message_steering/fx_transcript.ndjson", import.meta.url),
         modelSelection: FX_MODEL_SELECTION,
+        buildInput: messageRestartInput,
         assertOutput: assertGrokMessageSteeringOutput,
       },
       {
         driver: ProviderDriverKind.make("acpRegistry"),
         transcriptFile: new URL("./message_steering/registry_transcript.ndjson", import.meta.url),
         modelSelection: ACP_REGISTRY_MODEL_SELECTION,
+        buildInput: messageRestartInput,
         assertOutput: assertGrokMessageSteeringOutput,
       },
       {

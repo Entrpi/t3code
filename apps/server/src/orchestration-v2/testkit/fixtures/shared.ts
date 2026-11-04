@@ -289,6 +289,8 @@ export interface ProviderOrchestratorReplayVariant {
   readonly recordedScenario?: string;
   readonly transcriptEntriesThroughLabel?: string;
   readonly modelSelection: ModelSelection;
+  /** Replaces the fixture's steps for this provider, when its recording took another path. */
+  readonly buildInput?: () => OrchestratorFixtureInput;
   readonly runtimePolicyOverride?: RuntimePolicyV2Override;
   readonly runContinuationWorker?: boolean;
   readonly expectedAbsentWorkspacePaths?: ReadonlyArray<string>;
