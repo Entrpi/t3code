@@ -1,12 +1,6 @@
 import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { attachSidebarTree } from "../lib/sidebarTree";
-import {
-  type EnvironmentId,
-  type OrchestrationV2SubagentOrigin,
-  type OrchestrationV2ThreadShell,
-  type ScopedProjectRef,
-} from "@t3tools/contracts";
-import { SidebarChildThreads } from "@t3tools/contracts/settings";
+import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
@@ -193,8 +187,7 @@ import {
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   clusterSidebarThreadsByLineage,
-  liveSidebarSubagentsByParent,
-  SIDEBAR_CHILD_THREADS_LABELS,
+  sidebarSubsessionsByParent,
   sidebarLineageKey,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
@@ -341,8 +334,8 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
-const NO_SUBAGENTS: readonly OrchestrationV2ThreadShell[] = [];
-const NO_LIVE_SUBAGENTS: ReadonlyMap<string, OrchestrationV2ThreadShell[]> = new Map();
+const NO_SUBSESSIONS: readonly SidebarThreadSummary[] = [];
+const NO_SUBSESSIONS_BY_PARENT: ReadonlyMap<string, SidebarThreadSummary[]> = new Map();
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -1051,20 +1044,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const keepForksTogether = useClientSettings((settings) => settings.sidebarKeepForksTogether);
-  const subagentMode = useClientSettings((settings) => settings.sidebarSubagents);
-  const subsessionMode = useClientSettings((settings) => settings.sidebarSubsessions);
-  // `${origin}:${threadKey}` for each open list.
-  const [expandedSubagentKeys, setExpandedSubagentKeys] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  const showSubsessions = useClientSettings((settings) => settings.sidebarShowSubsessions);
+  const collapsedSubsessionThreadKeys = useUiStateStore(
+    (state) => state.collapsedSubsessionThreadKeys,
   );
-  const toggleSubagents = useStableCallback(
-    (threadKey: string, origin: OrchestrationV2SubagentOrigin) =>
-      setExpandedSubagentKeys((keys) => {
-        const next = new Set(keys);
-        const key = `${origin}:${threadKey}`;
-        if (!next.delete(key)) next.add(key);
-        return next;
-      }),
+  const setSubsessionsCollapsed = useUiStateStore((state) => state.setSubsessionsCollapsed);
+  const toggleSubsessions = useStableCallback((threadKey: string) =>
+    setSubsessionsCollapsed(threadKey, !collapsedSubsessionThreadKeys.includes(threadKey)),
   );
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -1175,10 +1161,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
-  const liveSubagentsByParent =
-    subagentMode === "hidden" && subsessionMode === "hidden"
-      ? NO_LIVE_SUBAGENTS
-      : liveSidebarSubagentsByParent(threads);
+  const subsessionsByParent = showSubsessions
+    ? sidebarSubsessionsByParent(threads)
+    : NO_SUBSESSIONS_BY_PARENT;
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1344,24 +1329,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     checked: keepForksTogether,
                   },
                 ]),
-            {
-              id: "subagents",
-              label: "Subagents",
-              children: SidebarChildThreads.literals.map((mode) => ({
-                id: `subagents:${mode}`,
-                label: SIDEBAR_CHILD_THREADS_LABELS[mode],
-                checked: subagentMode === mode,
-              })),
-            },
-            {
-              id: "subsessions",
-              label: "Subsessions",
-              children: SidebarChildThreads.literals.map((mode) => ({
-                id: `subsessions:${mode}`,
-                label: SIDEBAR_CHILD_THREADS_LABELS[mode],
-                checked: subsessionMode === mode,
-              })),
-            },
+            { id: "show-subsessions", label: "Show subsessions", checked: showSubsessions },
           ],
           { x: event.clientX, y: event.clientY },
         ),
@@ -1371,11 +1339,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         void updateClientSettings({ sidebarKeepForksTogether: !keepForksTogether });
         return;
       }
-      const [menu, value] = clicked.value?.split(":") ?? [];
-      const mode = SidebarChildThreads.literals.find((literal) => literal === value);
-      if (mode === undefined) return;
-      if (menu === "subagents") void updateClientSettings({ sidebarSubagents: mode });
-      if (menu === "subsessions") void updateClientSettings({ sidebarSubsessions: mode });
+      if (clicked.value === "show-subsessions") {
+        void updateClientSettings({ sidebarShowSubsessions: !showSubsessions });
+      }
     })();
   });
   const handleProjectFolderContextMenu = useStableCallback(
@@ -3481,14 +3447,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             thread={thread}
                             variant={rowVariant}
                             lineageLink={lineageLinkByKey.get(threadKey) ?? null}
-                            subagentMode={subagentMode}
-                            subsessionMode={subsessionMode}
-                            liveSubagents={liveSubagentsByParent.get(threadKey) ?? NO_SUBAGENTS}
-                            subagentsExpanded={expandedSubagentKeys.has(
-                              `provider_native:${threadKey}`,
-                            )}
-                            subsessionsExpanded={expandedSubagentKeys.has(`app_owned:${threadKey}`)}
-                            onToggleSubagents={toggleSubagents}
+                            showSubsessions={showSubsessions}
+                            subsessions={subsessionsByParent.get(threadKey) ?? NO_SUBSESSIONS}
+                            subsessionsCollapsed={collapsedSubsessionThreadKeys.includes(threadKey)}
+                            onToggleSubsessions={toggleSubsessions}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||

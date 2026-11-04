@@ -22,6 +22,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     sidebarProjectScopeKeys: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
+    collapsedSubsessionThreadKeys: [],
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
     ...overrides,
@@ -114,6 +115,7 @@ describe("parsePersistedState", () => {
           "turn-2": true,
         },
       },
+      collapsedSubsessionThreadKeys: ["environment:thread-1", ""],
     });
 
     expect(parsed).toEqual({
@@ -124,6 +126,7 @@ describe("parsePersistedState", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      collapsedSubsessionThreadKeys: ["environment:thread-1"],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKeys: [],
       pullRequestMergeMethod: "merge",
@@ -213,6 +216,7 @@ describe("uiStateStore persistence", () => {
           "turn-2": true,
         },
       },
+      collapsedSubsessionThreadKeys: ["environment:thread-1"],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
     });
 
@@ -239,6 +243,7 @@ describe("uiStateStore persistence", () => {
           "turn-2": true,
         },
       },
+      collapsedSubsessionThreadKeys: ["environment:thread-1"],
       pullRequestMergeMethod: "merge",
     });
     expect(parsePersistedState(persisted)).toEqual({

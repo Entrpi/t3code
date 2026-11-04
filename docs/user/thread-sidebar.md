@@ -157,27 +157,23 @@ its own. Dragging any thread in the group moves the whole group, and you cannot 
 thread inside it. Pinned, snoozed, and settled threads stay in their own sections. Each device
 keeps its own choice.
 
-### Show subagents and subsessions under their thread
+### Subsessions and subagents under their thread
 
 A thread can start two kinds of child:
 
-- **Subagents** run inside the thread's turn, such as Claude's Agent tool. You can read them but
-  not message them.
 - **Subsessions** are sessions the thread delegates work to. They keep their own history, and you
   can send them follow-ups.
+- **Subagents** run inside the thread's turn, such as Claude's Agent tool. You can read them but
+  not message them.
 
-Both stay out of the sidebar by default; you reach them from their thread's **Agents**. To see
-them in the sidebar, pick a mode for each in **Settings → General → Subagents in the sidebar** and
-**Subsessions in the sidebar** on web and desktop, or right-click the project filter button and
-choose **Subagents** or **Subsessions**:
+A thread's card lists its subsessions under a caret, open by default; the sidebar remembers the
+cards you collapse. Each row shows its last activity, and a blue or amber dot while it is working
+or waiting for you. Subagents show only as a count of those working right now, beside the thread
+or subsession running them. Turn the list off in **Settings → General → Show subsessions under
+their thread**, or right-click the project filter button.
 
-- **Count** shows how many the thread has started, such as "3 agents" or "2 sessions".
-- **Working and waiting** lists only those still working or waiting for you, under their thread.
-- **All** adds a toggle to the count that lists every one.
-
-A blue dot marks a child that is working, and an amber dot one that is waiting for you. Select one
-to open it. Each device keeps its own choice. Work delegated to another environment is not
-counted.
+Settle a subsession from its row like any thread. It moves to the **Settled** section as a card
+of its own, and goes back under its thread when you un-settle it.
 
 ### Detach a subsession to top level
 

@@ -19,20 +19,12 @@ import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/sh
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   isListedThreadLineage,
-  isLiveSubagentShell,
-  subagentOriginOf,
+  isSubsessionThread,
   type ContextMenuItem,
   type EnvironmentId,
-  type OrchestrationV2SubagentOrigin,
-  type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
-import type {
-  SidebarProjectSortOrder,
-  SidebarChildThreads,
-  SidebarThreadSortOrder,
-} from "@t3tools/contracts/settings";
-import * as DateTime from "effect/DateTime";
+import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import {
   effectiveSnoozed,
@@ -664,8 +656,15 @@ export async function deleteSelectedThreadEntries<
   return { deletedThreadKeys, firstFailure };
 }
 
-export function isSidebarHiddenThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
-  return !isListedThreadLineage(thread.lineage);
+/** Settled subsessions leave their parent's card for the Settled section. */
+const isSettledSubsession = (
+  thread: Pick<SidebarThreadSummary, "settledOverride" | "source">,
+): boolean => thread.settledOverride === "settled" && isSubsessionThread(thread.source);
+
+export function isSidebarHiddenThread(
+  thread: Pick<SidebarThreadSummary, "lineage" | "settledOverride" | "source">,
+): boolean {
+  return !isListedThreadLineage(thread.lineage) && !isSettledSubsession(thread);
 }
 
 // Subagent and side-chat threads have no sidebar row, so an open one is represented by
@@ -674,7 +673,10 @@ export function isSidebarHiddenThread(thread: Pick<SidebarThreadSummary, "lineag
 export function resolveSidebarRowThreadId(
   threadId: ThreadId,
   environmentId: EnvironmentId,
-  threads: readonly Pick<SidebarThreadSummary, "id" | "environmentId" | "lineage">[],
+  threads: readonly Pick<
+    SidebarThreadSummary,
+    "id" | "environmentId" | "lineage" | "settledOverride" | "source"
+  >[],
 ): ThreadId {
   const findThread = (id: ThreadId) =>
     threads.find((thread) => thread.id === id && thread.environmentId === environmentId);
@@ -693,7 +695,10 @@ export function resolveSidebarRowThreadId(
  * the sidebar lists, by thread key; they show under that thread, as subagents do.
  */
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "environmentId" | "id" | "lineage"> & {
+  T extends Pick<
+    SidebarThreadSummary,
+    "archivedAt" | "environmentId" | "id" | "lineage" | "settledOverride" | "source"
+  > & {
     projectId: string;
   },
 >(
@@ -704,11 +709,12 @@ export function filterSidebarV2VisibleThreads<
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
-      !isShownUnderParent(
-        { environmentId: thread.environmentId, threadId: thread.id },
-        thread.lineage,
-        delegatedUnderParent,
-      ) &&
+      (isSettledSubsession(thread) ||
+        !isShownUnderParent(
+          { environmentId: thread.environmentId, threadId: thread.id },
+          thread.lineage,
+          delegatedUnderParent,
+        )) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
@@ -1067,106 +1073,67 @@ export function groupSidebarThreadsByProject<
   return folders.filter((folder) => folder.threads.length > 0 || keepEmpty(folder.group));
 }
 
-export const SIDEBAR_CHILD_THREADS_LABELS: Record<SidebarChildThreads, string> = {
-  hidden: "Hidden",
-  count: "Count",
-  live: "Working and waiting",
-  all: "All",
-};
-
-export interface SidebarSubagentRow {
-  readonly id: ThreadId;
-  readonly title: string;
-  readonly state: "running" | "waiting" | null;
-}
-
-const isOrigin =
-  (origin: OrchestrationV2SubagentOrigin) =>
-  (thread: Pick<OrchestrationV2ThreadShell, "creationSource">) =>
-    subagentOriginOf(thread.creationSource) === origin;
-
 /**
- * A parent's subagents of one origin that are working or waiting. Delegated ones say so in their
- * own shell; provider-native ones run inside the parent, so its active run or background work
- * names them.
+ * How many of a session's own subagents are working or waiting now. They run inside its turn or
+ * as its background work, so its shell names them without reading their threads.
  */
-export function liveSidebarSubagents(
-  parent: Pick<SidebarThreadSummary, "pendingBackgroundTasks" | "workingSubagents">,
-  liveShells: ReadonlyArray<OrchestrationV2ThreadShell>,
-  origin: OrchestrationV2SubagentOrigin,
-): SidebarSubagentRow[] {
-  const rows: SidebarSubagentRow[] = liveShells.filter(isOrigin(origin)).map((thread) => ({
-    id: thread.id,
-    title: thread.title,
-    state: thread.pendingRuntimeRequest === null ? "running" : "waiting",
-  }));
-  const known = new Set<string>(rows.map((row) => row.id));
-  const add = (id: ThreadId, title: string | null | undefined) => {
-    if (known.has(id)) return;
-    known.add(id);
-    rows.push({ id, title: title ?? "Subagent", state: "running" });
-  };
-  for (const working of parent.workingSubagents ?? []) {
-    if (working.origin === origin) add(working.threadId, working.title);
+export function activeSidebarSubagentCount(
+  thread: Pick<SidebarThreadSummary, "workingSubagents" | "pendingBackgroundTasks">,
+): number {
+  const ids = new Set<string>();
+  for (const working of thread.workingSubagents ?? []) {
+    if (working.origin === "provider_native") ids.add(working.threadId);
   }
-  for (const task of parent.pendingBackgroundTasks) {
+  for (const task of thread.pendingBackgroundTasks) {
     // Providers report their own background agents without an origin.
-    if (
-      task.kind === "subagent" &&
-      task.childThreadId !== undefined &&
-      (task.origin ?? "provider_native") === origin
-    ) {
-      add(task.childThreadId, task.description);
+    if (task.kind === "subagent" && (task.origin ?? "provider_native") === "provider_native") {
+      ids.add(task.childThreadId ?? task.taskId);
     }
   }
-  return rows;
+  return ids.size;
 }
+
+const isOpenSubsessionOf = (
+  parentId: ThreadId,
+  thread: Pick<SidebarThreadSummary, "lineage" | "archivedAt" | "settledOverride" | "source">,
+) =>
+  thread.lineage.parentThreadId === parentId &&
+  isSubsessionThread(thread.source) &&
+  thread.archivedAt === null &&
+  thread.settledOverride !== "settled";
 
 /**
- * A parent's direct subagents of one origin for the sidebar: the live ones first, then the family
- * read's other active ones, most recently started first.
+ * A thread's subsessions under its card, most recently active first. Idle ones are only in the
+ * family read; the shell's own copies are fresher. Settled ones are listed with settled threads.
  */
-export function sidebarSubagentRows(
-  parentId: string,
-  live: ReadonlyArray<SidebarSubagentRow>,
-  family: ReadonlyArray<OrchestrationV2ThreadShell>,
-  origin: OrchestrationV2SubagentOrigin,
-): SidebarSubagentRow[] {
-  const seen = new Set<string>(live.map((row) => row.id));
-  const rest = family
-    .filter((thread) => {
-      if (
-        thread.lineage.relationshipToParent !== "subagent" ||
-        thread.lineage.parentThreadId !== parentId ||
-        thread.archivedAt !== null ||
-        !isOrigin(origin)(thread) ||
-        seen.has(thread.id)
-      ) {
-        return false;
-      }
-      seen.add(thread.id);
-      return true;
-    })
+export function sidebarSubsessionRows(
+  parentId: ThreadId,
+  known: ReadonlyArray<SidebarThreadSummary>,
+  family: ReadonlyArray<SidebarThreadSummary>,
+): SidebarThreadSummary[] {
+  const byId = new Map<string, SidebarThreadSummary>();
+  for (const thread of [...family, ...known]) byId.set(thread.id, thread);
+  return [...byId.values()]
+    .filter((thread) => isOpenSubsessionOf(parentId, thread))
     .toSorted(
       (left, right) =>
-        DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
+        Date.parse(right.latestUserMessageAt ?? right.updatedAt) -
+        Date.parse(left.latestUserMessageAt ?? left.updatedAt),
     );
-  return [...live, ...rest.map((thread) => ({ id: thread.id, title: thread.title, state: null }))];
 }
 
-/** Live subagents by their parent's thread key; the shell sends only these when it omits idle ones. */
-export function liveSidebarSubagentsByParent(
-  threads: ReadonlyArray<Pick<SidebarThreadSummary, "environmentId" | "source">>,
-): Map<string, OrchestrationV2ThreadShell[]> {
-  const byParent = new Map<string, OrchestrationV2ThreadShell[]>();
-  for (const { environmentId, source } of threads) {
-    const { parentThreadId, relationshipToParent } = source.lineage;
-    if (relationshipToParent !== "subagent" || parentThreadId === null) continue;
-    if (!isLiveSubagentShell(source)) continue;
-    const key = scopedThreadKey(scopeThreadRef(environmentId, parentThreadId));
+/** The shell's subsessions by their parent's thread key, whatever their state. */
+export function sidebarSubsessionsByParent(
+  threads: ReadonlyArray<SidebarThreadSummary>,
+): Map<string, SidebarThreadSummary[]> {
+  const byParent = new Map<string, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    const { parentThreadId } = thread.lineage;
+    if (parentThreadId === null || !isSubsessionThread(thread.source)) continue;
+    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, parentThreadId));
     const siblings = byParent.get(key);
-    if (siblings === undefined) byParent.set(key, [source]);
-    else siblings.push(source);
+    if (siblings === undefined) byParent.set(key, [thread]);
+    else siblings.push(thread);
   }
   return byParent;
 }
@@ -1547,7 +1514,7 @@ export function sortLogicalProjectsForSidebar<
 export function sortSidebarV2ProjectGroups<
   TProject extends LogicalSidebarProject,
   TThread extends ScopedSidebarThread &
-    Pick<SidebarThreadSummary, "environmentId" | "id" | "lineage">,
+    Pick<SidebarThreadSummary, "environmentId" | "id" | "lineage" | "settledOverride" | "source">,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],

@@ -24,12 +24,10 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type EnvironmentMachineKind,
-  type OrchestrationV2SubagentOrigin,
-  type OrchestrationV2ThreadShell,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 
-import type { SidebarChildThreads, TimestampFormat } from "@t3tools/contracts/settings";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -65,12 +63,12 @@ import { useRightPanelStore } from "../../rightPanelStore";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
-import { useNowMinute } from "../../hooks/useNowMinute";
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { vcsEnvironment } from "../../state/vcs";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-import { formatRelativeTimeLabel, parseTimestampDate } from "../../timestampFormat";
+import { parseTimestampDate } from "../../timestampFormat";
+import { RelativeTimeLabel, threadTimeTimestamp } from "./SidebarRelativeTime";
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
@@ -79,11 +77,10 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
   hasUnseenCompletion,
-  liveSidebarSubagents,
+  activeSidebarSubagentCount,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   type SidebarLineageLink,
-  type SidebarSubagentRow,
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
   shouldRecedeSidebarThread,
@@ -107,7 +104,11 @@ import {
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
 import { useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
-import { SidebarSubagentCount, SidebarSubagentList } from "./SidebarSubagents";
+import {
+  SidebarActiveSubagents,
+  SidebarSubsessionList,
+  SidebarSubsessionsToggle,
+} from "./SidebarSubsessions";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
@@ -135,26 +136,6 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
-function compactSidebarTimeLabel(label: string): string {
-  if (label === "just now") return "now";
-  return label.endsWith(" ago") ? label.slice(0, -4) : label;
-}
-
-// Subscribes to the minute tick itself, so only the label re-renders each
-// minute. The minute is passed as the clock so it is the formatter's input.
-function RelativeTimeLabel(props: { timestamp: string | null }) {
-  const nowMinute = useNowMinute();
-  return props.timestamp === null
-    ? null
-    : compactSidebarTimeLabel(
-        formatRelativeTimeLabel(props.timestamp, Date.parse(`${nowMinute}:00.000Z`)),
-      );
-}
-
-function threadTimeTimestamp(thread: SidebarThreadSummary): string {
-  return thread.latestUserMessageAt ?? thread.updatedAt;
-}
-
 function JumpHintBadge(props: { label: string }) {
   return (
     <Kbd aria-hidden data-jump-hint>
@@ -538,9 +519,6 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
   return <Icon aria-hidden className={cn("shrink-0", props.className)} />;
 }
 
-const NO_LIVE_SUBAGENTS: ReadonlyArray<SidebarSubagentRow> = [];
-const CHILD_THREAD_ORIGINS = ["provider_native", "app_owned"] as const;
-
 const LINEAGE_LINE = "before:absolute before:w-0.5 before:bg-sidebar-muted-foreground/50";
 
 // Runs under the folder icon, from just inside a lineage's first row to just inside its last.
@@ -566,14 +544,12 @@ type SidebarThreadRowProps = {
   variant: "card" | "slim" | "folder" | "folder-multiline";
   // Where an Active row sits in a fork lineage of two or more, for the connector line.
   lineageLink: SidebarLineageLink | null;
-  subagentMode: SidebarChildThreads;
-  subsessionMode: SidebarChildThreads;
-  // This thread's subagents and subsessions whose own shells say they are working or waiting.
-  liveSubagents: ReadonlyArray<OrchestrationV2ThreadShell>;
-  // Kept by the sidebar, so a row that moves between sections stays open.
-  subagentsExpanded: boolean;
-  subsessionsExpanded: boolean;
-  onToggleSubagents: (threadKey: string, origin: OrchestrationV2SubagentOrigin) => void;
+  showSubsessions: boolean;
+  // The shell's copies of this thread's subsessions; the list reads idle ones itself.
+  subsessions: ReadonlyArray<SidebarThreadSummary>;
+  // Kept by the sidebar, so a collapsed list stays collapsed across reloads.
+  subsessionsCollapsed: boolean;
+  onToggleSubsessions: (threadKey: string) => void;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1173,51 +1149,34 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       </span>
     ) : null;
   const diff = latestRunDiff(thread);
-  const childThreads = CHILD_THREAD_ORIGINS.map((origin) => {
-    const native = origin === "provider_native";
-    const mode = native ? props.subagentMode : props.subsessionMode;
-    const expanded = native ? props.subagentsExpanded : props.subsessionsExpanded;
-    const count =
-      (native ? thread.subagentCounts?.providerNative : thread.subagentCounts?.appOwned) ?? 0;
-    const live =
-      mode === "hidden"
-        ? NO_LIVE_SUBAGENTS
-        : liveSidebarSubagents(thread, props.liveSubagents, origin);
-    return {
-      chip:
-        count > 0 && (mode === "count" || mode === "all") ? (
-          <SidebarSubagentCount
-            key={origin}
-            origin={origin}
-            count={count}
-            live={live}
-            expanded={mode === "all" ? expanded : null}
-            onToggle={() => props.onToggleSubagents(threadKey, origin)}
-          />
-        ) : null,
-      list:
-        (mode === "live" && live.length > 0) || (mode === "all" && expanded && count > 0) ? (
-          <SidebarSubagentList
-            key={origin}
-            environmentId={thread.environmentId}
-            parentId={thread.id}
-            origin={origin}
-            live={live}
-            all={mode === "all"}
-            count={count}
-          />
-        ) : null,
-    };
-  });
-  const subagentChip = childThreads.some((child) => child.chip !== null)
-    ? childThreads.map((child) => child.chip)
-    : null;
-  const subagentList = childThreads.some((child) => child.list !== null)
-    ? childThreads.map((child) => child.list)
-    : null;
+  const openSubsessionCount = props.subsessions.filter(
+    (child) => child.archivedAt === null && child.settledOverride !== "settled",
+  ).length;
+  // Older servers send no count; the shell's own copies still show.
+  const subsessionCount = Math.max(thread.subagentCounts?.appOwned ?? 0, openSubsessionCount);
+  const subsessionCaret =
+    props.showSubsessions && subsessionCount > 0 ? (
+      <SidebarSubsessionsToggle
+        count={subsessionCount}
+        expanded={!props.subsessionsCollapsed}
+        onToggle={() => props.onToggleSubsessions(threadKey)}
+      />
+    ) : null;
+  const activeSubagentCount = activeSidebarSubagentCount(thread);
+  const activeSubagents =
+    activeSubagentCount > 0 ? <SidebarActiveSubagents count={activeSubagentCount} /> : null;
+  const subsessionList =
+    subsessionCaret !== null && !props.subsessionsCollapsed ? (
+      <SidebarSubsessionList
+        environmentId={thread.environmentId}
+        parentId={thread.id}
+        known={props.subsessions}
+        count={subsessionCount}
+        onSettle={onSettle}
+      />
+    ) : null;
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
-    subagentChip === null &&
     !thread.branch &&
     !showsScratchMachine &&
     prBadge === null &&
@@ -1244,7 +1203,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ) : (
         <span className="flex-1" />
       )}
-      {subagentChip}
       {terminalStatusIcon}
       {prBadge}
       {diff ? (
@@ -1336,7 +1294,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {draftIndicator}
               {title}
-              {multiline ? titleLineIcons : subagentChip}
+              {subsessionCaret}
+              {activeSubagents}
+              {multiline ? titleLineIcons : null}
               {pinIndicator}
               {multiline ? null : terminalStatusIcon}
               {isRegeneratingTitle ? (
@@ -1471,7 +1431,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
-        {subagentList}
+        {subsessionList}
       </li>
     );
   }
@@ -1668,6 +1628,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   Regenerating title
                 </span>
               ) : null}
+              {subsessionCaret}
+              {activeSubagents}
               {titleLineIcons}
             </div>
             {metaLine}
@@ -1675,7 +1637,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
-      {subagentList}
+      {subsessionList}
     </li>
   );
 });

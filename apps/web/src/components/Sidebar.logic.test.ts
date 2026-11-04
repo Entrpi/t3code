@@ -35,9 +35,11 @@ import {
   resolveSidebarDropVerb,
   groupSidebarThreadsByProject,
   clusterSidebarThreadsByLineage,
-  liveSidebarSubagents,
-  liveSidebarSubagentsByParent,
-  sidebarSubagentRows,
+  activeSidebarSubagentCount,
+  filterSidebarV2VisibleThreads,
+  isSidebarHiddenThread,
+  sidebarSubsessionRows,
+  sidebarSubsessionsByParent,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
 } from "./Sidebar.logic";
@@ -49,7 +51,8 @@ import {
 import { resolveProjectExpanded } from "../uiStateStore";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
-import type { OrchestrationV2SubagentOrigin, OrchestrationV2ThreadShell } from "@t3tools/contracts";
+import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
+import type { SidebarThreadSummary } from "../types";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -1704,124 +1707,83 @@ describe("clusterSidebarThreadsByLineage", () => {
   });
 });
 
-describe("sidebar subagents", () => {
-  const shell = (
+describe("sidebar subsessions", () => {
+  const parent = ThreadId.make("parent");
+  const child = (
     id: string,
-    parent: string | null,
     overrides: Partial<OrchestrationV2ThreadShell> = {},
-  ) =>
-    ({
+  ): SidebarThreadSummary =>
+    presentThreadShell(localEnvironmentId, {
+      ...makeThreadFixture().source,
       id: ThreadId.make(id),
-      lineage: {
-        parentThreadId: parent === null ? null : ThreadId.make(parent),
-        relationshipToParent: parent === null ? null : "subagent",
-        rootThreadId: ThreadId.make("root"),
-      },
-      createdAt: DateTime.makeUnsafe(`2026-11-04T10:0${id.length % 10}:00.000Z`),
-      archivedAt: null,
-      status: "completed",
-      activityRunStatus: null,
-      pendingRuntimeRequest: null,
-      pendingBackgroundTasks: [],
       title: id,
+      lineage: { parentThreadId: parent, relationshipToParent: "subagent", rootThreadId: parent },
       creationSource: "mcp",
+      latestUserMessageAt: null,
       ...overrides,
-    }) as OrchestrationV2ThreadShell;
-
-  it("finds each origin's working children in their own shell, the parent's run or its pending work", () => {
-    const delegated = shell("delegated", "root", { activityRunStatus: "running" });
-    const asking = shell("asking", "root", {
-      pendingRuntimeRequest: { kind: "user_input" } as never,
     });
-    const liveFor = (origin: OrchestrationV2SubagentOrigin) =>
-      liveSidebarSubagents(
-        {
-          workingSubagents: [
-            {
-              threadId: ThreadId.make("foreground"),
-              title: "In this turn",
-              origin: "provider_native",
-            },
-            { threadId: ThreadId.make("n"), title: null, origin: "provider_native" },
-            { threadId: ThreadId.make("handed"), title: "Delegated", origin: "app_owned" },
-          ],
-          pendingBackgroundTasks: [
-            // Providers report their own background agents without an origin.
-            {
-              kind: "subagent",
-              taskId: "t1",
-              description: "Native",
-              childThreadId: ThreadId.make("n"),
-            },
-            // Already known from its own shell.
-            {
-              kind: "subagent",
-              taskId: "t2",
-              childThreadId: ThreadId.make("delegated"),
-              origin: "app_owned",
-            },
-            { kind: "subagent", taskId: "t3", description: "Not projected yet" },
-            { kind: "command", taskId: "t4", description: "npm test" },
-            {
-              kind: "subagent",
-              taskId: "t5",
-              description: "Outlives the turn",
-              childThreadId: ThreadId.make("later"),
-              origin: "app_owned",
-            },
-          ],
-        },
-        [delegated, asking],
-        origin,
-      );
-    expect(liveFor("provider_native")).toEqual([
-      { id: "foreground", title: "In this turn", state: "running" },
-      { id: "n", title: "Subagent", state: "running" },
-    ]);
-    expect(liveFor("app_owned")).toEqual([
-      { id: "delegated", title: "delegated", state: "running" },
-      { id: "asking", title: "asking", state: "waiting" },
-      { id: "handed", title: "Delegated", state: "running" },
-      { id: "later", title: "Outlives the turn", state: "running" },
-    ]);
+  const at = (minute: number) =>
+    DateTime.makeUnsafe(`2026-11-04T10:${String(minute).padStart(2, "0")}:00.000Z`);
+
+  it("counts a session's own subagents working in its turn or its background work", () => {
+    expect(
+      activeSidebarSubagentCount({
+        workingSubagents: [
+          { threadId: ThreadId.make("a"), title: null, origin: "provider_native" },
+          { threadId: ThreadId.make("delegated"), title: null, origin: "app_owned" },
+        ],
+        pendingBackgroundTasks: [
+          // The same agent, still running after the turn: counted once.
+          { kind: "subagent", taskId: "t1", childThreadId: ThreadId.make("a") },
+          // Providers report their own background agents without an origin.
+          { kind: "subagent", taskId: "t2" },
+          { kind: "subagent", taskId: "t3", origin: "app_owned" },
+          { kind: "command", taskId: "t4" },
+        ],
+      }),
+    ).toBe(2);
   });
 
-  it("lists a parent's own active subagents once, working ones first, then newest first", () => {
-    const rows = sidebarSubagentRows(
-      "root",
-      [{ id: ThreadId.make("bb"), title: "live", state: "running" }],
+  it("lists a thread's open subsessions once, the shell's copy first, most recent first", () => {
+    const rows = sidebarSubsessionRows(
+      parent,
+      [child("fresh", { title: "from the shell", latestUserMessageAt: at(9) })],
       [
-        shell("a", "root"),
-        shell("bb", "root", { title: "family row" }),
-        shell("ccc", "root"),
-        shell("archived", "root", {
-          archivedAt: DateTime.makeUnsafe("2026-11-04T11:00:00.000Z"),
+        child("fresh", { title: "from the family read" }),
+        child("older", { latestUserMessageAt: at(1) }),
+        child("newer", { latestUserMessageAt: at(5) }),
+        child("settled", { settledOverride: "settled" }),
+        child("archived", { archivedAt: at(2) }),
+        child("native", { creationSource: "provider" }),
+        child("elsewhere", {
+          lineage: {
+            parentThreadId: ThreadId.make("other"),
+            relationshipToParent: "subagent",
+            rootThreadId: parent,
+          },
         }),
-        shell("grandchild", "a"),
-        shell("fork", null),
-        shell("native", "root", { creationSource: "provider" }),
       ],
-      "app_owned",
     );
-    expect(rows.map((row) => [row.id, row.title, row.state])).toEqual([
-      ["bb", "live", "running"],
-      ["ccc", "ccc", null],
-      ["a", "a", null],
+    expect(rows.map((row) => row.title)).toEqual(["from the shell", "newer", "older"]);
+  });
+
+  it("groups the shell's subsessions under their parent's key", () => {
+    const byParent = sidebarSubsessionsByParent([
+      child("session"),
+      child("native", { creationSource: "provider" }),
+      presentThreadShell(localEnvironmentId, { ...makeThreadFixture().source, id: parent }),
+    ]);
+    expect([...byParent].map(([key, rows]) => [key, rows.map((row) => row.id)])).toEqual([
+      [scopedThreadKey(scopeThreadRef(localEnvironmentId, parent)), ["session"]],
     ]);
   });
 
-  it("groups live subagent shells under their parent's key", () => {
-    const environmentId = EnvironmentId.make("environment-local");
-    const row = (source: OrchestrationV2ThreadShell) => ({ environmentId, source });
-    const running = shell("running", "root", { activityRunStatus: "running" });
-    const byParent = liveSidebarSubagentsByParent([
-      row(shell("root", null, { activityRunStatus: "running" })),
-      row(running),
-      row(shell("idle", "root")),
-    ]);
-    expect([...byParent]).toEqual([
-      [scopedThreadKey(scopeThreadRef(environmentId, ThreadId.make("root"))), [running]],
-    ]);
+  it("lists settled subsessions with threads and keeps open ones under their parent", () => {
+    const threads = [child("open"), child("settled", { settledOverride: "settled" })];
+    expect(
+      filterSidebarV2VisibleThreads(threads, null, new Set()).map((thread) => thread.id),
+    ).toEqual(["settled"]);
+    expect(threads.map(isSidebarHiddenThread)).toEqual([true, false]);
   });
 });
 

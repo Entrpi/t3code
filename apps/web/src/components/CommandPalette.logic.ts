@@ -408,6 +408,8 @@ export type BuildThreadActionItemsThread = Pick<
   | "modelSelection"
   | "projectId"
   | "runtime"
+  | "settledOverride"
+  | "source"
   | "title"
   | "worktreePath"
 > &

@@ -65,8 +65,6 @@ export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
 
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
-export const SidebarChildThreads = Schema.Literals(["hidden", "count", "live", "all"]);
-export type SidebarChildThreads = typeof SidebarChildThreads.Type;
 export const DetachedSubsessionGrouping = Schema.Literals(["grouped", "separate"]);
 export type DetachedSubsessionGrouping = typeof DetachedSubsessionGrouping.Type;
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
@@ -497,11 +495,8 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarWorkingShelfEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Flat sidebar only; project folders always keep forks together.
   sidebarKeepForksTogether: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  // How a thread's provider-native subagents and its delegated subsessions show under it.
-  sidebarSubagents: SidebarChildThreads.pipe(Schema.withDecodingDefault(Effect.succeed("hidden"))),
-  sidebarSubsessions: SidebarChildThreads.pipe(
-    Schema.withDecodingDefault(Effect.succeed("hidden")),
-  ),
+  // Lists a thread's subsessions under its card; its subagents show only as a live count.
+  sidebarShowSubsessions: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Whether Detach keeps a subsession beside its old parent's lineage by default.
   detachedSubsessionGrouping: DetachedSubsessionGrouping.pipe(
     Schema.withDecodingDefault(Effect.succeed("grouped")),
@@ -1840,8 +1835,7 @@ export const ClientSettingsPatch = Schema.Struct({
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarKeepForksTogether: Schema.optionalKey(Schema.Boolean),
-  sidebarSubagents: Schema.optionalKey(SidebarChildThreads),
-  sidebarSubsessions: Schema.optionalKey(SidebarChildThreads),
+  sidebarShowSubsessions: Schema.optionalKey(Schema.Boolean),
   detachedSubsessionGrouping: Schema.optionalKey(DetachedSubsessionGrouping),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

@@ -460,16 +460,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["fork lineage group family connector sidebar"],
   },
   {
-    id: "sidebar-subagents",
-    title: "Subagents in the sidebar",
-    to: "/settings/general",
-    searchTerms: ["subagent agent tool native child agents nested count live sidebar"],
-  },
-  {
     id: "sidebar-subsessions",
-    title: "Subsessions in the sidebar",
+    title: "Show subsessions under their thread",
     to: "/settings/general",
-    searchTerms: ["subsession session delegate delegated task child nested count live sidebar"],
+    searchTerms: [
+      "subsession session delegate delegated task subagent agent child nested count sidebar",
+    ],
   },
   {
     id: "detached-subsession-grouping",
