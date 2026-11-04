@@ -537,24 +537,24 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
   return <Icon aria-hidden className={cn("shrink-0", props.className)} />;
 }
 
-// Runs under the folder icon, from just inside a lineage's first row to just inside its last.
 const NO_LIVE_SUBAGENTS: ReadonlyArray<SidebarSubagentRow> = [];
 
+const LINEAGE_LINE = "before:absolute before:w-0.5 before:bg-sidebar-muted-foreground/50";
+
+// Runs under the folder icon, from just inside a lineage's first row to just inside its last.
 const LINEAGE_LINK_CLASS_NAME: Record<SidebarLineageLink, string> = {
-  first:
-    "before:absolute before:start-4.5 before:top-1 before:bottom-0 before:w-px before:bg-border",
-  middle: "before:absolute before:start-4.5 before:inset-y-0 before:w-px before:bg-border",
-  last: "before:absolute before:start-4.5 before:top-0 before:bottom-1 before:w-px before:bg-border",
+  first: `${LINEAGE_LINE} before:start-4.5 before:top-1 before:bottom-0`,
+  middle: `${LINEAGE_LINE} before:start-4.5 before:inset-y-0`,
+  last: `${LINEAGE_LINE} before:start-4.5 before:top-0 before:bottom-1`,
 };
 
 // The card list item clips overflow, so the line runs just inside the cards' edge, above their
-// fill, from the first card's top line to the last card's.
+// fill, from the first card's top line to the last card's bottom line. Linked items grow over
+// the list's 1px gap so the line has no seam.
 const CARD_LINEAGE_LINK_CLASS_NAME: Record<SidebarLineageLink, string> = {
-  first:
-    "relative before:absolute before:start-1 before:top-5 before:bottom-0 before:z-10 before:w-px before:bg-border",
-  middle:
-    "relative before:absolute before:start-1 before:inset-y-0 before:z-10 before:w-px before:bg-border",
-  last: "relative before:absolute before:start-1 before:top-0 before:h-5 before:z-10 before:w-px before:bg-border",
+  first: `relative -mb-px pb-[3px] ${LINEAGE_LINE} before:z-10 before:start-1 before:top-5 before:bottom-0`,
+  middle: `relative -mb-px pb-[3px] ${LINEAGE_LINE} before:z-10 before:start-1 before:inset-y-0`,
+  last: `relative ${LINEAGE_LINE} before:z-10 before:start-1 before:top-0 before:bottom-4`,
 };
 
 type SidebarThreadRowProps = {
