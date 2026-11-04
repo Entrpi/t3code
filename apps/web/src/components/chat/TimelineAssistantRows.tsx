@@ -5,7 +5,7 @@ import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { GitForkIcon } from "lucide-react";
-import { Button } from "../ui/button";
+import { Button, ButtonRevealLabel } from "../ui/button";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
@@ -131,6 +131,7 @@ function AssistantForkButton({
         }
       >
         <GitForkIcon className={cn("size-3", busy && "animate-pulse")} />
+        <ButtonRevealLabel>Fork</ButtonRevealLabel>
       </TooltipTrigger>
       <TooltipPopup side="top">Fork from this response</TooltipPopup>
     </Tooltip>
