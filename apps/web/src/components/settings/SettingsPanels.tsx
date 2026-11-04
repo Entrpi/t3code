@@ -22,7 +22,7 @@ import {
   type ResponseStreamingMode,
   type QuitConfirmationMode,
   SidebarProjectSortOrder,
-  SidebarSubagents,
+  SidebarChildThreads,
 } from "@t3tools/contracts/settings";
 import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -30,7 +30,7 @@ import { resolvePastedPath } from "@t3tools/shared/path";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
-import { SIDEBAR_SUBAGENTS_LABELS } from "../Sidebar.logic";
+import { SIDEBAR_CHILD_THREADS_LABELS } from "../Sidebar.logic";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
@@ -128,7 +128,7 @@ const SIDEBAR_PROJECT_SORT_ORDER_LABELS: Record<SidebarProjectSortOrder, string>
   manual: "Manual",
 };
 const isSidebarProjectSortOrder = Schema.is(SidebarProjectSortOrder);
-const isSidebarSubagents = Schema.is(SidebarSubagents);
+const isSidebarChildThreads = Schema.is(SidebarChildThreads);
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -492,6 +492,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarSubagents !== DEFAULT_UNIFIED_SETTINGS.sidebarSubagents
       ? ["Subagents in the sidebar"]
       : []),
+    ...(settings.sidebarSubsessions !== DEFAULT_UNIFIED_SETTINGS.sidebarSubsessions
+      ? ["Subsessions in the sidebar"]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -663,6 +666,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarKeepForksTogether: DEFAULT_UNIFIED_SETTINGS.sidebarKeepForksTogether,
       sidebarSubagents: DEFAULT_UNIFIED_SETTINGS.sidebarSubagents,
+      sidebarSubsessions: DEFAULT_UNIFIED_SETTINGS.sidebarSubsessions,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -945,42 +949,17 @@ export function GeneralSettingsPanel() {
             />
           }
         />
-        <SettingsRow
-          {...searchableSetting("sidebar-subagents")}
-          description="Show the subagents a thread starts under it in the sidebar: how many it has, only those still working or waiting for you, or all of them behind a toggle. Right-click the project filter to switch it from the sidebar."
-          resetAction={
-            settings.sidebarSubagents !== DEFAULT_UNIFIED_SETTINGS.sidebarSubagents ? (
-              <SettingResetButton
-                label="subagents in the sidebar"
-                onClick={() =>
-                  updateSettings({ sidebarSubagents: DEFAULT_UNIFIED_SETTINGS.sidebarSubagents })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={settings.sidebarSubagents}
-              onValueChange={(value) => {
-                if (isSidebarSubagents(value)) updateSettings({ sidebarSubagents: value });
-              }}
-            >
-              <SelectTrigger
-                size="sm"
-                className="w-full sm:w-44"
-                aria-label="Subagents in the sidebar"
-              >
-                <SelectValue>{SIDEBAR_SUBAGENTS_LABELS[settings.sidebarSubagents]}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {SidebarSubagents.literals.map((mode) => (
-                  <SelectItem hideIndicator key={mode} value={mode}>
-                    {SIDEBAR_SUBAGENTS_LABELS[mode]}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
+        <ChildThreadsSettingRow
+          settingKey="sidebarSubagents"
+          searchId="sidebar-subagents"
+          label="Subagents in the sidebar"
+          description="Show the agents a provider starts inside a thread's turn, such as Claude's Agent tool, under the thread: how many it has, only those still working or waiting for you, or all of them behind a toggle. Right-click the project filter to switch it from the sidebar."
+        />
+        <ChildThreadsSettingRow
+          settingKey="sidebarSubsessions"
+          searchId="sidebar-subsessions"
+          label="Subsessions in the sidebar"
+          description="Show the sessions a thread delegates work to, which keep their own history and can take follow-ups, under the thread: how many it has, only those still working or waiting for you, or all of them behind a toggle."
         />
       </SettingsSection>
 
@@ -1308,6 +1287,51 @@ export function ChatSettingsPanel() {
         />
       </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+function ChildThreadsSettingRow(props: {
+  readonly settingKey: "sidebarSubagents" | "sidebarSubsessions";
+  readonly searchId: "sidebar-subagents" | "sidebar-subsessions";
+  readonly label: string;
+  readonly description: string;
+}) {
+  const { settingKey, label } = props;
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const value = settings[settingKey];
+  return (
+    <SettingsRow
+      {...searchableSetting(props.searchId)}
+      description={props.description}
+      resetAction={
+        value !== DEFAULT_UNIFIED_SETTINGS[settingKey] ? (
+          <SettingResetButton
+            label={label.toLowerCase()}
+            onClick={() => updateSettings({ [settingKey]: DEFAULT_UNIFIED_SETTINGS[settingKey] })}
+          />
+        ) : null
+      }
+      control={
+        <Select
+          value={value}
+          onValueChange={(next) => {
+            if (isSidebarChildThreads(next)) updateSettings({ [settingKey]: next });
+          }}
+        >
+          <SelectTrigger size="sm" className="w-full sm:w-44" aria-label={label}>
+            <SelectValue>{SIDEBAR_CHILD_THREADS_LABELS[value]}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {SidebarChildThreads.literals.map((mode) => (
+              <SelectItem hideIndicator key={mode} value={mode}>
+                {SIDEBAR_CHILD_THREADS_LABELS[mode]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      }
+    />
   );
 }
 

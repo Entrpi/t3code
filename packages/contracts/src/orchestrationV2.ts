@@ -524,6 +524,10 @@ export function isProviderNativeSubagentThread(
   return thread.lineage.relationshipToParent === "subagent" && thread.creationSource === "provider";
 }
 
+/** A subagent thread's origin: providers create their native children, T3 its delegated ones. */
+export const subagentOriginOf = (creationSource: string): OrchestrationV2SubagentOrigin =>
+  creationSource === "provider" ? "provider_native" : "app_owned";
+
 export const IDLE_COMPACTION_TEXT = "/compact";
 
 interface CompactionMessageFields {
@@ -881,12 +885,16 @@ export const OrchestrationV2RemoteTaskChild = Schema.Struct({
 });
 export type OrchestrationV2RemoteTaskChild = typeof OrchestrationV2RemoteTaskChild.Type;
 
+/** `app_owned` children are T3 `delegate_task` threads; `provider_native` ones run inside a turn. */
+export const OrchestrationV2SubagentOrigin = Schema.Literals(["provider_native", "app_owned"]);
+export type OrchestrationV2SubagentOrigin = typeof OrchestrationV2SubagentOrigin.Type;
+
 export const OrchestrationV2Subagent = Schema.Struct({
   id: NodeId,
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
   parentNodeId: NodeId,
-  origin: Schema.Literals(["provider_native", "app_owned"]),
+  origin: OrchestrationV2SubagentOrigin,
   createdBy: OrchestrationV2Actor,
   driver: ProviderDriverKind,
   providerInstanceId: ProviderInstanceId,
@@ -1022,6 +1030,8 @@ export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(
       /** The owning provider thread's instance, populated in derived pending work. */
       providerInstanceId: Schema.optional(ProviderInstanceId),
       childThreadId: Schema.optional(ThreadId),
+      /** Absent for provider-reported tasks, which are provider-native, and from older servers. */
+      origin: Schema.optional(OrchestrationV2SubagentOrigin),
     }),
     Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("command") }),
     Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("monitor") }),
@@ -1803,7 +1813,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("subagent"),
     subagentId: NodeId,
-    origin: Schema.Literals(["provider_native", "app_owned"]),
+    origin: OrchestrationV2SubagentOrigin,
     driver: ProviderDriverKind,
     providerInstanceId: ProviderInstanceId,
     childThreadId: Schema.NullOr(ThreadId),
@@ -2119,16 +2129,24 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Guest messages waiting for the owner to send or dismiss. Absent from older servers. */
   pendingGuestMessageCount: Schema.optional(NonNegativeInt),
   /**
-   * Active subagent children, idle ones included, on shells a subscription streams. Absent when
-   * there are none and from older servers.
+   * Active subagent children by origin, idle ones included, on shells a subscription streams.
+   * Absent when there are none and from older servers.
    */
-  subagentCount: Schema.optional(NonNegativeInt),
+  subagentCounts: Schema.optional(
+    Schema.Struct({ providerNative: NonNegativeInt, appOwned: NonNegativeInt }),
+  ),
   /**
    * Subagents still working in the active run. Provider-native ones have no run of their own, so
    * their child shells look idle. Absent when there are none and from older servers.
    */
   workingSubagents: Schema.optional(
-    Schema.Array(Schema.Struct({ threadId: ThreadId, title: Schema.NullOr(Schema.String) })),
+    Schema.Array(
+      Schema.Struct({
+        threadId: ThreadId,
+        title: Schema.NullOr(Schema.String),
+        origin: OrchestrationV2SubagentOrigin,
+      }),
+    ),
   ),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -2644,7 +2662,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("subagent"),
     subagentId: NodeId,
-    origin: Schema.Literals(["provider_native", "app_owned"]),
+    origin: OrchestrationV2SubagentOrigin,
     driver: ProviderDriverKind,
     providerInstanceId: ProviderInstanceId,
     childThreadId: Schema.NullOr(ThreadId),

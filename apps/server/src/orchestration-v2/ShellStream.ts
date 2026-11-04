@@ -8,6 +8,7 @@ import type {
   OrchestrationV2ThreadShellSnapshot,
   OrchestrationV2ShellStreamItem,
   OrchestrationV2StoredEvent,
+  OrchestrationV2SubagentOrigin,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -17,6 +18,7 @@ import {
   isOlderSettledThreadShell,
   OrchestrationProjectShell as ProjectShellSchema,
   OrchestrationV2ThreadShell as ThreadShellSchema,
+  subagentOriginOf,
 } from "@t3tools/contracts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import type * as Arr from "effect/Array";
@@ -330,7 +332,7 @@ export const loadSubscriberShellSnapshot = Effect.fn("ShellStream.loadSubscriber
     return {
       snapshot: {
         ...snapshot,
-        threads: snapshot.threads.map((thread) => withSubagentCount(thread, counts)),
+        threads: snapshot.threads.map((thread) => withSubagentCounts(thread, counts)),
       },
       subagentThreadIds: facts.subagentThreadIds,
       subagentParents,
@@ -421,16 +423,23 @@ export type ShellApplicationEvent =
       readonly parentThreadId?: ThreadId;
     };
 
-/** The parent whose `subagentCount` a thread lifecycle event changes. */
-function subagentCountParentOf(event: OrchestrationV2StoredEvent["event"]): ThreadId | null {
+export interface SubagentParent {
+  readonly parentThreadId: ThreadId;
+  readonly origin: OrchestrationV2SubagentOrigin;
+}
+
+/** The subagent a thread lifecycle event creates, archives, restores or deletes. */
+function subagentLifecycleOf(event: OrchestrationV2StoredEvent["event"]): SubagentParent | null {
   switch (event.type) {
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":
-    case "thread.deleted":
-      return event.payload.lineage.relationshipToParent === "subagent"
-        ? event.payload.lineage.parentThreadId
+    case "thread.deleted": {
+      const { lineage, creationSource } = event.payload;
+      return lineage.relationshipToParent === "subagent" && lineage.parentThreadId !== null
+        ? { parentThreadId: lineage.parentThreadId, origin: subagentOriginOf(creationSource) }
         : null;
+    }
     default:
       return null;
   }
@@ -438,15 +447,18 @@ function subagentCountParentOf(event: OrchestrationV2StoredEvent["event"]): Thre
 
 /**
  * Each active subagent's parent. A subscription keeps this from its snapshot and the lifecycle
- * events after it, so parent shells carry `subagentCount` while idle children stay out.
+ * events after it, so parent shells carry `subagentCounts` while idle children stay out.
  */
 export function subagentParentsOf(
-  rows: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
-): Map<string, ThreadId> {
-  const parents = new Map<string, ThreadId>();
+  rows: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage" | "creationSource">>,
+): Map<string, SubagentParent> {
+  const parents = new Map<string, SubagentParent>();
   for (const row of rows) {
     if (row.lineage.relationshipToParent === "subagent" && row.lineage.parentThreadId !== null) {
-      parents.set(row.id, row.lineage.parentThreadId);
+      parents.set(row.id, {
+        parentThreadId: row.lineage.parentThreadId,
+        origin: subagentOriginOf(row.creationSource),
+      });
     }
   }
   return parents;
@@ -454,30 +466,45 @@ export function subagentParentsOf(
 
 export function trackSubagentParent(
   stored: ApplicationStoredEvent,
-  parents: Map<string, ThreadId>,
+  parents: Map<string, SubagentParent>,
 ): void {
   if ("aggregateKind" in stored) return;
-  const parent = subagentCountParentOf(stored.event);
-  if (parent === null) return;
+  const subagent = subagentLifecycleOf(stored.event);
+  if (subagent === null) return;
   if (stored.event.type === "thread.archived" || stored.event.type === "thread.deleted") {
     parents.delete(stored.event.threadId);
   } else {
-    parents.set(stored.event.threadId, parent);
+    parents.set(stored.event.threadId, subagent);
   }
 }
 
-export function subagentCountsOf(parents: ReadonlyMap<string, ThreadId>): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const parent of parents.values()) counts.set(parent, (counts.get(parent) ?? 0) + 1);
+type SubagentCounts = NonNullable<OrchestrationV2ThreadShell["subagentCounts"]>;
+
+export function subagentCountsOf(
+  parents: ReadonlyMap<string, SubagentParent>,
+): Map<string, SubagentCounts> {
+  const counts = new Map<string, SubagentCounts>();
+  for (const { parentThreadId, origin } of parents.values()) {
+    const { providerNative, appOwned } = counts.get(parentThreadId) ?? {
+      providerNative: 0,
+      appOwned: 0,
+    };
+    counts.set(
+      parentThreadId,
+      origin === "provider_native"
+        ? { providerNative: providerNative + 1, appOwned }
+        : { providerNative, appOwned: appOwned + 1 },
+    );
+  }
   return counts;
 }
 
-export function withSubagentCount(
+export function withSubagentCounts(
   thread: OrchestrationV2ThreadShell,
-  counts: ReadonlyMap<string, number>,
+  counts: ReadonlyMap<string, SubagentCounts>,
 ): OrchestrationV2ThreadShell {
-  const subagentCount = counts.get(thread.id);
-  return subagentCount === undefined ? thread : { ...thread, subagentCount };
+  const subagentCounts = counts.get(thread.id);
+  return subagentCounts === undefined ? thread : { ...thread, subagentCounts };
 }
 
 /** Refreshes a subagent's parent after each event that changes the parent's count. */
@@ -527,11 +554,11 @@ export function toShellApplicationEvent(stored: ApplicationStoredEvent): ShellAp
       sequence: stored.sequence,
     };
   }
-  const parentThreadId = subagentCountParentOf(stored.event);
+  const subagent = subagentLifecycleOf(stored.event);
   return {
     sequence: stored.sequence,
     event: { threadId: stored.event.threadId },
-    ...(parentThreadId === null ? {} : { parentThreadId }),
+    ...(subagent === null ? {} : { parentThreadId: subagent.parentThreadId }),
   };
 }
 

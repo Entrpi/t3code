@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationV2SubagentOrigin, ThreadId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { ChevronRightIcon } from "lucide-react";
 import { RegistryContext } from "@effect/atom-react";
@@ -21,14 +21,21 @@ const STATE_DOT_CLASS_NAME = { running: "bg-info", waiting: "bg-warning" } as co
 
 const stopRowEvent = (event: ReactMouseEvent | ReactKeyboardEvent) => event.stopPropagation();
 
-/** "N agents" on a parent's row; a toggle for its list when `expanded` is set. */
+const NOUNS: Record<OrchestrationV2SubagentOrigin, readonly [string, string]> = {
+  provider_native: ["agent", "agents"],
+  app_owned: ["session", "sessions"],
+};
+
+/** "N agents" or "N sessions" on a parent's row; a toggle for its list when `expanded` is set. */
 export function SidebarSubagentCount(props: {
+  readonly origin: OrchestrationV2SubagentOrigin;
   readonly count: number;
   readonly live: ReadonlyArray<SidebarSubagentRow>;
   readonly expanded: boolean | null;
   readonly onToggle: () => void;
 }) {
-  const label = `${props.count} ${props.count === 1 ? "agent" : "agents"}`;
+  const [one, many] = NOUNS[props.origin];
+  const label = `${props.count} ${props.count === 1 ? one : many}`;
   const dot = props.live.some((row) => row.state === "waiting")
     ? STATE_DOT_CLASS_NAME.waiting
     : props.live.length > 0
@@ -69,21 +76,22 @@ export function SidebarSubagentCount(props: {
   );
 }
 
-/** A parent's subagents under its row: its live ones, or with `all`, every active one. */
+/** A parent's children of one origin under its row: its live ones, or with `all`, every active one. */
 export function SidebarSubagentList(props: {
   readonly environmentId: EnvironmentId;
   readonly parentId: ThreadId;
+  readonly origin: OrchestrationV2SubagentOrigin;
   readonly live: ReadonlyArray<SidebarSubagentRow>;
   readonly all: boolean;
   readonly count: number;
 }) {
-  const { environmentId, parentId, all, count } = props;
+  const { environmentId, parentId, origin, all, count } = props;
   const registry = useContext(RegistryContext);
   // Idle children are left out of the shell; the family read the Agents panel uses has them.
   const family = useEnvironmentQuery(
     all ? threadFamilies.familyAtom(environmentId, parentId) : null,
   );
-  const rows = sidebarSubagentRows(parentId, props.live, family.data?.threads ?? []);
+  const rows = sidebarSubagentRows(parentId, props.live, family.data?.threads ?? [], origin);
   const readAgainFor = useRef<number | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a family read lasts the shell generation, so the server's count says when it missed a child
   useEffect(() => {

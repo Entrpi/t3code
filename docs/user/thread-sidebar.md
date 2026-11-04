@@ -157,18 +157,27 @@ its own. Dragging any thread in the group moves the whole group, and you cannot 
 thread inside it. Pinned, snoozed, and settled threads stay in their own sections. Each device
 keeps its own choice.
 
-### Show subagents under their thread
+### Show subagents and subsessions under their thread
 
-Subagents stay out of the sidebar by default; you reach them from their thread's **Agents**. To
-see them in the sidebar, pick a mode in **Settings → General → Subagents in the sidebar** on web
-and desktop, or right-click the project filter button and choose **Subagents**:
+A thread can start two kinds of child:
 
-- **Count** shows how many subagents a thread has started.
+- **Subagents** run inside the thread's turn, such as Claude's Agent tool. You can read them but
+  not message them.
+- **Subsessions** are sessions the thread delegates work to. They keep their own history, and you
+  can send them follow-ups.
+
+Both stay out of the sidebar by default; you reach them from their thread's **Agents**. To see
+them in the sidebar, pick a mode for each in **Settings → General → Subagents in the sidebar** and
+**Subsessions in the sidebar** on web and desktop, or right-click the project filter button and
+choose **Subagents** or **Subsessions**:
+
+- **Count** shows how many the thread has started, such as "3 agents" or "2 sessions".
 - **Working and waiting** lists only those still working or waiting for you, under their thread.
 - **All** adds a toggle to the count that lists every one.
 
-A blue dot marks a subagent that is working, and an amber dot one that is waiting for you. Select
-a subagent to open it. Each device keeps its own choice.
+A blue dot marks a child that is working, and an amber dot one that is waiting for you. Select one
+to open it. Each device keeps its own choice. Work delegated to another environment is not
+counted.
 
 ### Group threads by project (beta)
 

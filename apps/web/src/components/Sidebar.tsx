@@ -2,10 +2,11 @@ import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { attachSidebarTree } from "../lib/sidebarTree";
 import {
   type EnvironmentId,
+  type OrchestrationV2SubagentOrigin,
   type OrchestrationV2ThreadShell,
   type ScopedProjectRef,
 } from "@t3tools/contracts";
-import { SidebarSubagents } from "@t3tools/contracts/settings";
+import { SidebarChildThreads } from "@t3tools/contracts/settings";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
@@ -192,7 +193,7 @@ import {
   groupSidebarThreadsByProject,
   clusterSidebarThreadsByLineage,
   liveSidebarSubagentsByParent,
-  SIDEBAR_SUBAGENTS_LABELS,
+  SIDEBAR_CHILD_THREADS_LABELS,
   sidebarLineageKey,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
@@ -1048,15 +1049,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const keepForksTogether = useClientSettings((settings) => settings.sidebarKeepForksTogether);
   const subagentMode = useClientSettings((settings) => settings.sidebarSubagents);
+  const subsessionMode = useClientSettings((settings) => settings.sidebarSubsessions);
+  // `${origin}:${threadKey}` for each open list.
   const [expandedSubagentKeys, setExpandedSubagentKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const toggleSubagents = useStableCallback((threadKey: string) =>
-    setExpandedSubagentKeys((keys) => {
-      const next = new Set(keys);
-      if (!next.delete(threadKey)) next.add(threadKey);
-      return next;
-    }),
+  const toggleSubagents = useStableCallback(
+    (threadKey: string, origin: OrchestrationV2SubagentOrigin) =>
+      setExpandedSubagentKeys((keys) => {
+        const next = new Set(keys);
+        const key = `${origin}:${threadKey}`;
+        if (!next.delete(key)) next.add(key);
+        return next;
+      }),
   );
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -1168,7 +1173,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         );
   const threads = useQuietThreadShells();
   const liveSubagentsByParent =
-    subagentMode === "hidden" ? NO_LIVE_SUBAGENTS : liveSidebarSubagentsByParent(threads);
+    subagentMode === "hidden" && subsessionMode === "hidden"
+      ? NO_LIVE_SUBAGENTS
+      : liveSidebarSubagentsByParent(threads);
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1337,10 +1344,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             {
               id: "subagents",
               label: "Subagents",
-              children: SidebarSubagents.literals.map((mode) => ({
+              children: SidebarChildThreads.literals.map((mode) => ({
                 id: `subagents:${mode}`,
-                label: SIDEBAR_SUBAGENTS_LABELS[mode],
+                label: SIDEBAR_CHILD_THREADS_LABELS[mode],
                 checked: subagentMode === mode,
+              })),
+            },
+            {
+              id: "subsessions",
+              label: "Subsessions",
+              children: SidebarChildThreads.literals.map((mode) => ({
+                id: `subsessions:${mode}`,
+                label: SIDEBAR_CHILD_THREADS_LABELS[mode],
+                checked: subsessionMode === mode,
               })),
             },
           ],
@@ -1352,10 +1368,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         void updateClientSettings({ sidebarKeepForksTogether: !keepForksTogether });
         return;
       }
-      const mode = SidebarSubagents.literals.find(
-        (value) => clicked.value === `subagents:${value}`,
-      );
-      if (mode !== undefined) void updateClientSettings({ sidebarSubagents: mode });
+      const [menu, value] = clicked.value?.split(":") ?? [];
+      const mode = SidebarChildThreads.literals.find((literal) => literal === value);
+      if (mode === undefined) return;
+      if (menu === "subagents") void updateClientSettings({ sidebarSubagents: mode });
+      if (menu === "subsessions") void updateClientSettings({ sidebarSubsessions: mode });
     })();
   });
   const handleProjectFolderContextMenu = useStableCallback(
@@ -3436,8 +3453,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             variant={rowVariant}
                             lineageLink={lineageLinkByKey.get(threadKey) ?? null}
                             subagentMode={subagentMode}
+                            subsessionMode={subsessionMode}
                             liveSubagents={liveSubagentsByParent.get(threadKey) ?? NO_SUBAGENTS}
-                            subagentsExpanded={expandedSubagentKeys.has(threadKey)}
+                            subagentsExpanded={expandedSubagentKeys.has(
+                              `provider_native:${threadKey}`,
+                            )}
+                            subsessionsExpanded={expandedSubagentKeys.has(`app_owned:${threadKey}`)}
                             onToggleSubagents={toggleSubagents}
                             navigationParent={
                               folderRow ??

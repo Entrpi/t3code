@@ -2,6 +2,7 @@ import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
+  OrchestrationV2SubagentOrigin,
   OrchestrationV2TurnItem,
   ThreadId,
   ThreadPullRequestLink,
@@ -134,6 +135,7 @@ type PendingBackgroundWorkTurnItem = {
   } | null;
   readonly input?: unknown;
   readonly monitor?: boolean | undefined;
+  readonly origin?: OrchestrationV2SubagentOrigin;
   readonly prompt?: string | undefined;
   readonly childThreadId?: ThreadId | null;
 };
@@ -190,6 +192,7 @@ function pendingTaskFromTurnItem(
           ? {}
           : { providerInstanceId: item.owningProviderInstanceId }),
         ...(item.childThreadId == null ? {} : { childThreadId: item.childThreadId }),
+        ...(item.origin === undefined ? {} : { origin: item.origin }),
       };
     case "command_execution":
       return { ...named, kind: item.monitor === true ? "monitor" : "command" };

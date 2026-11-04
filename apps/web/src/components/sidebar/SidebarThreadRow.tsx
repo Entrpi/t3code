@@ -24,11 +24,12 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  type OrchestrationV2SubagentOrigin,
   type OrchestrationV2ThreadShell,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 
-import type { SidebarSubagents, TimestampFormat } from "@t3tools/contracts/settings";
+import type { SidebarChildThreads, TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -538,6 +539,7 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
 }
 
 const NO_LIVE_SUBAGENTS: ReadonlyArray<SidebarSubagentRow> = [];
+const CHILD_THREAD_ORIGINS = ["provider_native", "app_owned"] as const;
 
 const LINEAGE_LINE = "before:absolute before:w-0.5 before:bg-sidebar-muted-foreground/50";
 
@@ -564,12 +566,14 @@ type SidebarThreadRowProps = {
   variant: "card" | "slim" | "folder" | "folder-multiline";
   // Where an Active row sits in a fork lineage of two or more, for the connector line.
   lineageLink: SidebarLineageLink | null;
-  subagentMode: SidebarSubagents;
-  // This thread's subagents whose own shells say they are working or waiting.
+  subagentMode: SidebarChildThreads;
+  subsessionMode: SidebarChildThreads;
+  // This thread's subagents and subsessions whose own shells say they are working or waiting.
   liveSubagents: ReadonlyArray<OrchestrationV2ThreadShell>;
   // Kept by the sidebar, so a row that moves between sections stays open.
   subagentsExpanded: boolean;
-  onToggleSubagents: (threadKey: string) => void;
+  subsessionsExpanded: boolean;
+  onToggleSubagents: (threadKey: string, origin: OrchestrationV2SubagentOrigin) => void;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1169,31 +1173,48 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       </span>
     ) : null;
   const diff = latestRunDiff(thread);
-  const subagentCount = thread.subagentCount ?? 0;
-  const liveSubagents =
-    props.subagentMode === "hidden"
-      ? NO_LIVE_SUBAGENTS
-      : liveSidebarSubagents(thread, props.liveSubagents);
-  const subagentChip =
-    subagentCount > 0 && (props.subagentMode === "count" || props.subagentMode === "all") ? (
-      <SidebarSubagentCount
-        count={subagentCount}
-        live={liveSubagents}
-        expanded={props.subagentMode === "all" ? props.subagentsExpanded : null}
-        onToggle={() => props.onToggleSubagents(threadKey)}
-      />
-    ) : null;
-  const subagentList =
-    (props.subagentMode === "live" && liveSubagents.length > 0) ||
-    (props.subagentMode === "all" && props.subagentsExpanded && subagentCount > 0) ? (
-      <SidebarSubagentList
-        environmentId={thread.environmentId}
-        parentId={thread.id}
-        live={liveSubagents}
-        all={props.subagentMode === "all"}
-        count={subagentCount}
-      />
-    ) : null;
+  const childThreads = CHILD_THREAD_ORIGINS.map((origin) => {
+    const native = origin === "provider_native";
+    const mode = native ? props.subagentMode : props.subsessionMode;
+    const expanded = native ? props.subagentsExpanded : props.subsessionsExpanded;
+    const count =
+      (native ? thread.subagentCounts?.providerNative : thread.subagentCounts?.appOwned) ?? 0;
+    const live =
+      mode === "hidden"
+        ? NO_LIVE_SUBAGENTS
+        : liveSidebarSubagents(thread, props.liveSubagents, origin);
+    return {
+      chip:
+        count > 0 && (mode === "count" || mode === "all") ? (
+          <SidebarSubagentCount
+            key={origin}
+            origin={origin}
+            count={count}
+            live={live}
+            expanded={mode === "all" ? expanded : null}
+            onToggle={() => props.onToggleSubagents(threadKey, origin)}
+          />
+        ) : null,
+      list:
+        (mode === "live" && live.length > 0) || (mode === "all" && expanded && count > 0) ? (
+          <SidebarSubagentList
+            key={origin}
+            environmentId={thread.environmentId}
+            parentId={thread.id}
+            origin={origin}
+            live={live}
+            all={mode === "all"}
+            count={count}
+          />
+        ) : null,
+    };
+  });
+  const subagentChip = childThreads.some((child) => child.chip !== null)
+    ? childThreads.map((child) => child.chip)
+    : null;
+  const subagentList = childThreads.some((child) => child.list !== null)
+    ? childThreads.map((child) => child.list)
+    : null;
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
     subagentChip === null &&

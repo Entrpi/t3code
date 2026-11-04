@@ -463,7 +463,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "sidebar-subagents",
     title: "Subagents in the sidebar",
     to: "/settings/general",
-    searchTerms: ["subagent subsession delegate child agents nested count live sidebar"],
+    searchTerms: ["subagent agent tool native child agents nested count live sidebar"],
+  },
+  {
+    id: "sidebar-subsessions",
+    title: "Subsessions in the sidebar",
+    to: "/settings/general",
+    searchTerms: ["subsession session delegate delegated task child nested count live sidebar"],
   },
   {
     id: "boring-sidebar",

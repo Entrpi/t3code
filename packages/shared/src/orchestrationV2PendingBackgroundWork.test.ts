@@ -334,6 +334,7 @@ describe("derivePendingBackgroundWork kinds", () => {
           title: "Review src/math.ts",
           nativeItemRef: { nativeId: "sub" },
           childThreadId: "thread:child" as never,
+          origin: "app_owned",
         },
         {
           id: "item-cmd" as never,
@@ -355,6 +356,7 @@ describe("derivePendingBackgroundWork kinds", () => {
         description: "Review src/math.ts",
         kind: "subagent",
         childThreadId: "thread:child",
+        origin: "app_owned",
       },
       { taskId: "cmd", description: "npm test", kind: "command" },
     ]);

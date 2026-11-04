@@ -36,6 +36,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2Subagent,
+  OrchestrationV2SubagentOrigin,
   OrchestrationV2ThreadShellSnapshot,
   OrchestrationV2ShellThreadStatus,
   OrchestrationV2ThreadShell,
@@ -66,6 +67,7 @@ import {
   OrchestrationV2SubagentJson as OrchestrationV2SubagentJsonSchema,
   OrchestrationV2TurnItemJson as OrchestrationV2TurnItemJsonSchema,
   orchestrationV2RunWorkStartedAt,
+  subagentOriginOf,
   RunId,
   MessageId,
   RuntimeRequestId,
@@ -421,7 +423,14 @@ export interface ShellSnapshotOptions {
 /** What a shell subscriber's trims read from an active thread, without building its shell. */
 export interface ActiveShellIndexEntry extends Pick<
   OrchestrationV2ThreadShell,
-  "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "pinnedAt" | "snoozedUntil"
+  | "id"
+  | "projectId"
+  | "lineage"
+  | "creationSource"
+  | "settledOverride"
+  | "settledAt"
+  | "pinnedAt"
+  | "snoozedUntil"
 > {
   /** False only when no run, request, work item, or watch can make the shell live. */
   readonly mayBeLive: boolean;
@@ -430,6 +439,7 @@ export interface ActiveShellIndexEntry extends Pick<
 export interface ActiveSubagent {
   readonly threadId: ThreadId;
   readonly parentThreadId: ThreadId | null;
+  readonly origin: OrchestrationV2SubagentOrigin;
 }
 
 export interface OlderSettledThreadsQuery {
@@ -1552,7 +1562,7 @@ export function workingSubagentsOf(
     item.childThreadId !== null &&
     item.runId === activeRunId &&
     WORKING_SUBAGENT_STATUSES.has(item.status)
-      ? [{ threadId: item.childThreadId, title: item.title }]
+      ? [{ threadId: item.childThreadId, title: item.title, origin: item.origin }]
       : [],
   );
 }
@@ -7168,8 +7178,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       const rows = yield* sql<{
         readonly thread_id: string;
         readonly parent_thread_id: string | null;
+        readonly creation_source: string;
       }>`
-        SELECT thread_id, json_extract(payload_json, '$.lineage.parentThreadId') AS parent_thread_id
+        SELECT
+          thread_id,
+          json_extract(payload_json, '$.lineage.parentThreadId') AS parent_thread_id,
+          json_extract(payload_json, '$.creationSource') AS creation_source
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL
           AND json_extract(payload_json, '$.archivedAt') IS NULL
@@ -7178,6 +7192,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       return rows.map((row) => ({
         threadId: ThreadId.make(row.thread_id),
         parentThreadId: row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
+        origin: subagentOriginOf(row.creation_source),
       }));
     }, Effect.mapError(shellSnapshotReadError));
 
@@ -7196,6 +7211,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly parent_thread_id: string | null;
         readonly root_thread_id: string;
         readonly side_chat: number | null;
+        readonly creation_source: OrchestrationV2ThreadShell["creationSource"];
         readonly settled_override: string | null;
         readonly settled_at: string | null;
         readonly pinned_at: string | null;
@@ -7209,6 +7225,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           json_extract(t.payload_json, '$.lineage.parentThreadId') AS parent_thread_id,
           json_extract(t.payload_json, '$.lineage.rootThreadId') AS root_thread_id,
           json_extract(t.payload_json, '$.lineage.sideChat') AS side_chat,
+          json_extract(t.payload_json, '$.creationSource') AS creation_source,
           json_extract(t.payload_json, '$.settledOverride') AS settled_override,
           json_extract(t.payload_json, '$.settledAt') AS settled_at,
           json_extract(t.payload_json, '$.pinnedAt') AS pinned_at,
@@ -7265,6 +7282,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           rootThreadId: ThreadId.make(row.root_thread_id),
           ...(row.side_chat === null ? {} : { sideChat: row.side_chat === 1 }),
         },
+        creationSource: row.creation_source,
         settledOverride:
           row.settled_override === "settled" || row.settled_override === "active"
             ? row.settled_override

@@ -143,10 +143,11 @@ import {
   skipUnchangedThreadShells,
   toShellApplicationEvent,
   trackSubagentParent,
-  withSubagentCount,
+  withSubagentCounts,
   withSubagentParentRefreshes,
   subagentCountsOf,
   type ShellApplicationEvent,
+  type SubagentParent,
 } from "./orchestration-v2/ShellStream.ts";
 import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
 import {
@@ -1097,7 +1098,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projectService = yield* ProjectService.ProjectService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
     let subagentThreadIds = new Set<string>();
-    let subagentParents = new Map<string, ThreadId>();
+    let subagentParents = new Map<string, SubagentParent>();
     const filterSubagentTranscript = (stored: ApplicationStoredEvent) => {
       trackSubagentParent(stored, subagentParents);
       return shouldPublishShellApplicationEvent(stored, subagentThreadIds);
@@ -1208,7 +1209,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
                 : (batchedShells.get(threadId) ?? null);
             return shellStreamItemFromThreadShell({
               stored,
-              shell: shell === null ? null : withSubagentCount(shell, subagentCounts),
+              shell: shell === null ? null : withSubagentCounts(shell, subagentCounts),
             });
           }),
         { concurrency: 8 },
@@ -1320,8 +1321,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       const subagents = yield* threadManagement.listActiveSubagents();
       subagentThreadIds = new Set(subagents.map((subagent) => subagent.threadId));
       subagentParents = new Map(
-        subagents.flatMap((subagent) =>
-          subagent.parentThreadId === null ? [] : [[subagent.threadId, subagent.parentThreadId]],
+        subagents.flatMap(({ threadId, parentThreadId, origin }) =>
+          parentThreadId === null ? [] : [[threadId, { parentThreadId, origin }]],
         ),
       );
 

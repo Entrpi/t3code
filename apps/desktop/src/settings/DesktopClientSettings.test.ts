@@ -71,6 +71,7 @@ const clientSettings: ClientSettings = {
   sidebarWorkingShelfEnabled: false,
   sidebarKeepForksTogether: false,
   sidebarSubagents: "hidden",
+  sidebarSubsessions: "hidden",
   loadBalancingEnabled: false,
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
   pullRequestMergeMethodOverrides: {},

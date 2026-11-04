@@ -20,14 +20,16 @@ import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
 import {
   isListedThreadLineage,
   isLiveSubagentShell,
+  subagentOriginOf,
   type ContextMenuItem,
   type EnvironmentId,
+  type OrchestrationV2SubagentOrigin,
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
 import type {
   SidebarProjectSortOrder,
-  SidebarSubagents,
+  SidebarChildThreads,
   SidebarThreadSortOrder,
 } from "@t3tools/contracts/settings";
 import * as DateTime from "effect/DateTime";
@@ -1065,7 +1067,7 @@ export function groupSidebarThreadsByProject<
   return folders.filter((folder) => folder.threads.length > 0 || keepEmpty(folder.group));
 }
 
-export const SIDEBAR_SUBAGENTS_LABELS: Record<SidebarSubagents, string> = {
+export const SIDEBAR_CHILD_THREADS_LABELS: Record<SidebarChildThreads, string> = {
   hidden: "Hidden",
   count: "Count",
   live: "Working and waiting",
@@ -1078,15 +1080,22 @@ export interface SidebarSubagentRow {
   readonly state: "running" | "waiting" | null;
 }
 
+const isOrigin =
+  (origin: OrchestrationV2SubagentOrigin) =>
+  (thread: Pick<OrchestrationV2ThreadShell, "creationSource">) =>
+    subagentOriginOf(thread.creationSource) === origin;
+
 /**
- * A parent's subagents that are working or waiting. Delegated ones say so in their own shell;
- * provider-native ones run inside the parent, so its active run or background work names them.
+ * A parent's subagents of one origin that are working or waiting. Delegated ones say so in their
+ * own shell; provider-native ones run inside the parent, so its active run or background work
+ * names them.
  */
 export function liveSidebarSubagents(
   parent: Pick<SidebarThreadSummary, "pendingBackgroundTasks" | "workingSubagents">,
   liveShells: ReadonlyArray<OrchestrationV2ThreadShell>,
+  origin: OrchestrationV2SubagentOrigin,
 ): SidebarSubagentRow[] {
-  const rows: SidebarSubagentRow[] = liveShells.map((thread) => ({
+  const rows: SidebarSubagentRow[] = liveShells.filter(isOrigin(origin)).map((thread) => ({
     id: thread.id,
     title: thread.title,
     state: thread.pendingRuntimeRequest === null ? "running" : "waiting",
@@ -1097,9 +1106,16 @@ export function liveSidebarSubagents(
     known.add(id);
     rows.push({ id, title: title ?? "Subagent", state: "running" });
   };
-  for (const working of parent.workingSubagents ?? []) add(working.threadId, working.title);
+  for (const working of parent.workingSubagents ?? []) {
+    if (working.origin === origin) add(working.threadId, working.title);
+  }
   for (const task of parent.pendingBackgroundTasks) {
-    if (task.kind === "subagent" && task.childThreadId !== undefined) {
+    // Providers report their own background agents without an origin.
+    if (
+      task.kind === "subagent" &&
+      task.childThreadId !== undefined &&
+      (task.origin ?? "provider_native") === origin
+    ) {
       add(task.childThreadId, task.description);
     }
   }
@@ -1107,13 +1123,14 @@ export function liveSidebarSubagents(
 }
 
 /**
- * A parent's direct subagents for the sidebar: the live ones first, then the family read's
- * other active ones, most recently started first.
+ * A parent's direct subagents of one origin for the sidebar: the live ones first, then the family
+ * read's other active ones, most recently started first.
  */
 export function sidebarSubagentRows(
   parentId: string,
   live: ReadonlyArray<SidebarSubagentRow>,
   family: ReadonlyArray<OrchestrationV2ThreadShell>,
+  origin: OrchestrationV2SubagentOrigin,
 ): SidebarSubagentRow[] {
   const seen = new Set<string>(live.map((row) => row.id));
   const rest = family
@@ -1122,6 +1139,7 @@ export function sidebarSubagentRows(
         thread.lineage.relationshipToParent !== "subagent" ||
         thread.lineage.parentThreadId !== parentId ||
         thread.archivedAt !== null ||
+        !isOrigin(origin)(thread) ||
         seen.has(thread.id)
       ) {
         return false;

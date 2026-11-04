@@ -49,7 +49,7 @@ import {
 import { resolveProjectExpanded } from "../uiStateStore";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
-import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
+import type { OrchestrationV2SubagentOrigin, OrchestrationV2ThreadShell } from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -1711,40 +1711,65 @@ describe("sidebar subagents", () => {
       pendingRuntimeRequest: null,
       pendingBackgroundTasks: [],
       title: id,
+      creationSource: "mcp",
       ...overrides,
     }) as OrchestrationV2ThreadShell;
 
-  it("finds working subagents in their own shell and native ones in the parent's run or pending work", () => {
+  it("finds each origin's working children in their own shell, the parent's run or its pending work", () => {
     const delegated = shell("delegated", "root", { activityRunStatus: "running" });
     const asking = shell("asking", "root", {
       pendingRuntimeRequest: { kind: "user_input" } as never,
     });
-    const live = liveSidebarSubagents(
-      {
-        workingSubagents: [
-          { threadId: ThreadId.make("foreground"), title: "In this turn" },
-          { threadId: ThreadId.make("n"), title: null },
-        ],
-        pendingBackgroundTasks: [
-          {
-            kind: "subagent",
-            taskId: "t1",
-            description: "Native",
-            childThreadId: ThreadId.make("n"),
-          },
-          // Already known from its own shell.
-          { kind: "subagent", taskId: "t2", childThreadId: ThreadId.make("delegated") },
-          { kind: "subagent", taskId: "t3", description: "Not projected yet" },
-          { kind: "command", taskId: "t4", description: "npm test" },
-        ],
-      },
-      [delegated, asking],
-    );
-    expect(live).toEqual([
-      { id: "delegated", title: "delegated", state: "running" },
-      { id: "asking", title: "asking", state: "waiting" },
+    const liveFor = (origin: OrchestrationV2SubagentOrigin) =>
+      liveSidebarSubagents(
+        {
+          workingSubagents: [
+            {
+              threadId: ThreadId.make("foreground"),
+              title: "In this turn",
+              origin: "provider_native",
+            },
+            { threadId: ThreadId.make("n"), title: null, origin: "provider_native" },
+            { threadId: ThreadId.make("handed"), title: "Delegated", origin: "app_owned" },
+          ],
+          pendingBackgroundTasks: [
+            // Providers report their own background agents without an origin.
+            {
+              kind: "subagent",
+              taskId: "t1",
+              description: "Native",
+              childThreadId: ThreadId.make("n"),
+            },
+            // Already known from its own shell.
+            {
+              kind: "subagent",
+              taskId: "t2",
+              childThreadId: ThreadId.make("delegated"),
+              origin: "app_owned",
+            },
+            { kind: "subagent", taskId: "t3", description: "Not projected yet" },
+            { kind: "command", taskId: "t4", description: "npm test" },
+            {
+              kind: "subagent",
+              taskId: "t5",
+              description: "Outlives the turn",
+              childThreadId: ThreadId.make("later"),
+              origin: "app_owned",
+            },
+          ],
+        },
+        [delegated, asking],
+        origin,
+      );
+    expect(liveFor("provider_native")).toEqual([
       { id: "foreground", title: "In this turn", state: "running" },
       { id: "n", title: "Subagent", state: "running" },
+    ]);
+    expect(liveFor("app_owned")).toEqual([
+      { id: "delegated", title: "delegated", state: "running" },
+      { id: "asking", title: "asking", state: "waiting" },
+      { id: "handed", title: "Delegated", state: "running" },
+      { id: "later", title: "Outlives the turn", state: "running" },
     ]);
   });
 
@@ -1761,7 +1786,9 @@ describe("sidebar subagents", () => {
         }),
         shell("grandchild", "a"),
         shell("fork", null),
+        shell("native", "root", { creationSource: "provider" }),
       ],
+      "app_owned",
     );
     expect(rows.map((row) => [row.id, row.title, row.state])).toEqual([
       ["bb", "live", "running"],

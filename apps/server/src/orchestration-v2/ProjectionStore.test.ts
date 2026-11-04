@@ -1071,7 +1071,13 @@ it.effect("SQL shells use the latest subagent owner for duplicate provider-threa
       }
     });
     const owned = [
-      { taskId: nativeTaskId, description: item.title, kind: "subagent", providerInstanceId },
+      {
+        taskId: nativeTaskId,
+        description: item.title,
+        kind: "subagent",
+        providerInstanceId,
+        origin: "provider_native",
+      },
     ];
     yield* assertOwners(threadId, owned);
     yield* assertOwners(otherThreadId, owned);
@@ -2250,9 +2256,11 @@ it("names the subagents still working in a thread's active run", () => {
     status: OrchestrationV2TurnItem["status"],
     runId: RunId | null = activeRunId,
     type = "subagent",
+    origin = "app_owned",
   ) =>
     ({
       type,
+      origin,
       runId,
       status,
       title: childThreadId === null ? null : `Task ${childThreadId}`,
@@ -2262,7 +2270,7 @@ it("names the subagents still working in a thread's active run", () => {
     ProjectionStore.workingSubagentsOf(
       [
         item("running", "running"),
-        item("waiting", "waiting"),
+        item("waiting", "waiting", activeRunId, "subagent", "provider_native"),
         item("done", "completed"),
         item("older-run", "running", RunId.make("run:old")),
         item(null, "running"),
@@ -2271,8 +2279,8 @@ it("names the subagents still working in a thread's active run", () => {
       activeRunId,
     ),
     [
-      { threadId: ThreadId.make("running"), title: "Task running" },
-      { threadId: ThreadId.make("waiting"), title: "Task waiting" },
+      { threadId: ThreadId.make("running"), title: "Task running", origin: "app_owned" },
+      { threadId: ThreadId.make("waiting"), title: "Task waiting", origin: "provider_native" },
     ],
   );
   assert.deepStrictEqual(
@@ -2286,11 +2294,12 @@ it.effect("lists only active subagents and their parents without loading shell d
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const sql = yield* SqlClient.SqlClient;
     const createdAt = "2026-01-05T00:00:00.000Z";
-    for (const [id, relationship, archivedAt, deletedAt] of [
-      ["parent", null, null, null],
-      ["active-subagent", "subagent", null, null],
-      ["archived-subagent", "subagent", createdAt, null],
-      ["deleted-subagent", "subagent", null, createdAt],
+    for (const [id, relationship, archivedAt, deletedAt, creationSource] of [
+      ["parent", null, null, null, "web"],
+      ["active-subagent", "subagent", null, null, "mcp"],
+      ["active-native-subagent", "subagent", null, null, "provider"],
+      ["archived-subagent", "subagent", createdAt, null, "mcp"],
+      ["deleted-subagent", "subagent", null, createdAt, "mcp"],
     ] as const) {
       yield* sql`
         INSERT INTO orchestration_v2_projection_threads (
@@ -2304,6 +2313,7 @@ it.effect("lists only active subagents and their parents without loading shell d
               relationshipToParent: relationship,
               parentThreadId: relationship === null ? null : "parent",
             },
+            creationSource,
             archivedAt,
           })}
         )
@@ -2311,7 +2321,16 @@ it.effect("lists only active subagents and their parents without loading shell d
     }
 
     assert.deepStrictEqual(yield* store.listActiveSubagents(), [
-      { threadId: ThreadId.make("active-subagent"), parentThreadId: ThreadId.make("parent") },
+      {
+        threadId: ThreadId.make("active-subagent"),
+        parentThreadId: ThreadId.make("parent"),
+        origin: "app_owned",
+      },
+      {
+        threadId: ThreadId.make("active-native-subagent"),
+        parentThreadId: ThreadId.make("parent"),
+        origin: "provider_native",
+      },
     ]);
   }).pipe(Effect.provide(layerTest)),
 );

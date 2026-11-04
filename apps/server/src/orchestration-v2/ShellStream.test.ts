@@ -31,7 +31,8 @@ import {
   subagentParentsOf,
   toShellApplicationEvent,
   trackSubagentParent,
-  withSubagentCount,
+  type SubagentParent,
+  withSubagentCounts,
   withSubagentParentRefreshes,
 } from "./ShellStream.ts";
 
@@ -217,43 +218,49 @@ describe("subagent counts", () => {
     relationshipToParent: parent === null ? null : ("subagent" as const),
     rootThreadId: ThreadId.make("root"),
   });
-  const row = (id: string, parent: string | null) =>
-    shellFixture({ id: ThreadId.make(id), lineage: lineage(parent) });
+  const row = (id: string, parent: string | null, creationSource: "mcp" | "provider" = "mcp") =>
+    shellFixture({ id: ThreadId.make(id), lineage: lineage(parent), creationSource });
 
-  it("gives each parent the count of its active subagents, idle ones included", () => {
+  it("gives each parent the count of its active subagents by origin, idle ones included", () => {
     const parents = subagentParentsOf([
       row("root", null),
       row("idle", "root"),
       row("running", "root"),
-      row("grandchild", "running"),
+      row("native", "root", "provider"),
+      row("grandchild", "running", "provider"),
       row("lonely", null),
     ]);
     const counts = subagentCountsOf(parents);
     const stamped = [row("root", null), row("running", "root"), row("lonely", null)].map((thread) =>
-      withSubagentCount(thread, counts),
+      withSubagentCounts(thread, counts),
     );
-    expect(stamped.map((thread) => [thread.id, thread.subagentCount])).toEqual([
-      ["root", 2],
-      ["running", 1],
+    expect(stamped.map((thread) => [thread.id, thread.subagentCounts])).toEqual([
+      ["root", { providerNative: 1, appOwned: 2 }],
+      ["running", { providerNative: 1, appOwned: 0 }],
       ["lonely", undefined],
     ]);
-    expect("subagentCount" in stamped[2]!).toBe(false);
+    expect("subagentCounts" in stamped[2]!).toBe(false);
   });
 
   it("follows subagent lifecycle events and refreshes the parent they change", () => {
-    const parents = new Map<string, ThreadId>();
+    const parents = new Map<string, SubagentParent>();
     const event = (type: string, threadId = "child") =>
       ({
         sequence: 7,
-        event: { threadId, type, payload: { lineage: lineage("root") } },
+        event: {
+          threadId,
+          type,
+          payload: { lineage: lineage("root"), creationSource: "provider" },
+        },
       }) as ApplicationStoredEvent;
+    const child = { parentThreadId: "root", origin: "provider_native" };
 
     trackSubagentParent(event("thread.created"), parents);
-    expect([...parents]).toEqual([["child", "root"]]);
+    expect([...parents]).toEqual([["child", child]]);
     trackSubagentParent(event("thread.archived"), parents);
     expect(parents.size).toBe(0);
     trackSubagentParent(event("thread.unarchived"), parents);
-    expect(parents.get("child")).toBe("root");
+    expect(parents.get("child")).toEqual(child);
     trackSubagentParent(event("thread.deleted"), parents);
     expect(parents.size).toBe(0);
 
