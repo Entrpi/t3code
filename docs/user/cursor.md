@@ -49,15 +49,15 @@ The adapter supports:
 - assistant text, reasoning, tool activity, plans, and todo streaming;
 - thread-scoped T3 Code MCP tools alongside ambient Cursor MCP/plugins from disk;
 - image attachments;
-- interruption, queued app messages, and orchestrator-owned interrupt/restart steering;
+- interruption, queued app messages, and orchestrator-owned interrupt and restart;
 - provider conversation snapshots through `Agent.messages.list()`;
 - Cursor `task` subagents, projected as read-only child app threads with their tool activity and
   final result.
 
 The public SDK does not currently expose native agent fork, conversation rollback, active steering,
-or interactive approval callbacks. Direct active steering is advertised as unsupported, while V2
-steering uses the orchestrator's interrupt-and-restart path and preserves the app run identity across
-provider turns. Same-provider Cursor forks use the orchestrator's portable full-thread context
+or interactive approval callbacks. Direct active steering is advertised as unsupported, so a message
+sent while Cursor works waits for the turn to end. An explicit restart interrupts the turn and starts
+it over with the message, keeping the app run identity across provider turns. Same-provider Cursor forks use the orchestrator's portable full-thread context
 handoff into a fresh Cursor agent. The SDK has in-process custom callback tools, but the V2 adapter
 intentionally uses the authenticated, thread-scoped MCP server instead.
 

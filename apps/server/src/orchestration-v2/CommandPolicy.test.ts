@@ -165,14 +165,17 @@ it.each([
 });
 
 // regression: #26695 an interrupt-restart steer cancels Copilot's background agents
-it("queues a steer for a provider that cannot steer either way", () => {
+it.each([
+  ["cannot steer either way", false],
+  ["can only interrupt and restart its turn", true],
+])("queues a steer for a provider that %s", (_, supportsSteeringByInterruptRestart) => {
   const projection = dispatchProjection(
     capabilities((current) => ({
       ...current,
       turns: {
         ...current.turns,
         supportsActiveSteering: false,
-        supportsSteeringByInterruptRestart: false,
+        supportsSteeringByInterruptRestart,
         supportsQueuedMessages: true,
       },
     })),
