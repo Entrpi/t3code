@@ -73,6 +73,12 @@ If your **Send shortcut** requires `Cmd+Enter` or `Ctrl+Enter`, that shortcut us
 your default follow-up behavior; add **Shift** to use the opposite action. This
 applies only to multiline messages when you choose the multiline send option.
 
+Steer adds your message to the running turn without stopping any work. Agents that
+can't do that queue the message whatever your setting. For Claude, and for agents
+that can only restart their turn, such as Cursor, Grok and Antigravity, the opposite
+action is **Interrupt and send**: Claude stops its running tools and reads your
+message, and the others stop the turn and start it over with your message.
+
 Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
 the oldest queued message as a steer. This leaves the current draft intact and
 requires an active turn that supports steering. If that shortcut sends the opposite
@@ -243,8 +249,8 @@ shortcut described above.
 
 On web and desktop, queued messages appear at the end of the thread as dashed messages that have
 not been sent yet. On mobile they appear above the composer. Each shows its text and any attached
-images. **Send now** sends a message right away, into the running turn if there is one. You can
-also edit or remove it.
+images. **Send now** sends a message right away, into the running turn if there is one, or
+interrupts it where the agent can't take messages mid-turn. You can also edit or remove it.
 
 If you stop the agent or the server restarts, queued messages keep their order and are held.
 Press **Resume** in an empty composer to continue. **Resume** also continues a stopped

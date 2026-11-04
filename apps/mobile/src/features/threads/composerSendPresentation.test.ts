@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveComposerSendPresentation } from "./composerSendPresentation";
+import { followUpActionCopy, resolveComposerSendPresentation } from "./composerSendPresentation";
 
 const idle = {
   editingQueuedMessage: false,
   running: false,
-  canSteer: false,
+  steering: "none",
   followUpBehavior: "queue",
   deliveryDeferred: false,
 } as const;
@@ -22,7 +22,7 @@ describe("resolveComposerSendPresentation", () => {
     const presentation = resolveComposerSendPresentation({
       ...idle,
       running: true,
-      canSteer: false,
+      steering: "none",
       followUpBehavior: "steer",
     });
 
@@ -31,4 +31,23 @@ describe("resolveComposerSendPresentation", () => {
     expect(presentation.alternate).toBeNull();
     expect(presentation.offersFollowUpChoice).toBe(false);
   });
+
+  it.each([
+    ["cancels-tools", "steer"],
+    ["restarts", "restart"],
+  ] as const)(
+    "queues by default where steering %s, and offers Interrupt and send",
+    (steering, alternate) => {
+      const presentation = resolveComposerSendPresentation({
+        ...idle,
+        running: true,
+        steering,
+        followUpBehavior: "steer",
+      });
+
+      expect(presentation.label).toBe("Queue");
+      expect(presentation.alternate).toBe(alternate);
+      expect(followUpActionCopy(alternate, steering).title).toBe("Interrupt and send");
+    },
+  );
 });

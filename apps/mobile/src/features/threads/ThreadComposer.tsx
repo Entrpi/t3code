@@ -91,9 +91,13 @@ import { useScaledTextRole, type ScaledTextRole } from "../settings/appearance/u
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { Menu } from "../../components/ui/Menu";
-import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/composer-dispatch";
+import type {
+  ActiveTurnComposerAction,
+  ActiveTurnSteering,
+} from "@t3tools/client-runtime/state/composer-dispatch";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import {
+  followUpActionCopy,
   resolveComposerSendPresentation,
   type ComposerSendPresentation,
 } from "./composerSendPresentation";
@@ -230,7 +234,7 @@ export interface ThreadComposerProps {
     readonly onRemoveExistingAttachment: (attachmentId: string) => void;
   } | null;
   readonly followUpBehavior: FollowUpBehavior;
-  readonly canSteerActiveTurn: boolean;
+  readonly activeTurnSteering: ActiveTurnSteering;
   readonly hidden: boolean;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
   readonly onChangeDraftMessage: (value: string) => void;
@@ -290,18 +294,6 @@ const COMPOSER_ATTACHMENT_ENTERING =
 
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
 
-const FOLLOW_UP_ACTION_LABEL = {
-  queue: "Queue",
-  steer: "Steer now",
-  restart: "Restart turn",
-} as const;
-
-const FOLLOW_UP_ACTION_SUBTITLE = {
-  queue: "Run after the current turn",
-  steer: "Interrupt what the agent is doing",
-  restart: "Start the turn over with this message",
-} as const;
-
 function SendActionButton(props: {
   readonly size?: "regular" | "large";
   readonly accessibilityLabel: string;
@@ -332,8 +324,7 @@ function SendActionButton(props: {
       shouldOpenOnLongPress
       actions={actions.map((action) => ({
         id: action,
-        title: FOLLOW_UP_ACTION_LABEL[action],
-        subtitle: FOLLOW_UP_ACTION_SUBTITLE[action],
+        ...followUpActionCopy(action, presentation.steering),
         state: action === presentation.action ? ("on" as const) : ("off" as const),
       }))}
       onPressAction={({ nativeEvent }) =>
@@ -479,7 +470,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const sendPresentation = resolveComposerSendPresentation({
     editingQueuedMessage: queuedEdit !== null,
     running: props.activeThreadBusy,
-    canSteer: props.canSteerActiveTurn,
+    steering: props.activeTurnSteering,
     followUpBehavior: props.followUpBehavior,
     deliveryDeferred:
       props.connectionState !== "connected" || props.queueCount > 0 || attachmentsUploading,
@@ -526,6 +517,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       currentModelSelection.instanceId,
       props.serverConfig?.providers ?? [],
       props.serverConfig?.usageLimitSources ?? [],
+      // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
       Date.now(),
     );
     onShowUsageLimits(report);
@@ -1047,7 +1039,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   alternateSubmitTitle={
                     sendPresentation.alternate === null
                       ? sendPresentation.label
-                      : FOLLOW_UP_ACTION_LABEL[sendPresentation.alternate]
+                      : followUpActionCopy(sendPresentation.alternate, sendPresentation.steering)
+                          .title
                   }
                   {...compactEditor.editorProps}
                   textStyle={{

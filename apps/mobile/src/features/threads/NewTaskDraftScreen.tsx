@@ -962,7 +962,7 @@ export function NewTaskDraftScreen(props: {
         queuedRunEdit={null}
         composerDraftKey={flow.draftKey}
         followUpBehavior="queue"
-        canSteerActiveTurn={false}
+        activeTurnSteering="none"
         isSavingQueuedEdit={false}
         onCancelQueuedRunEdit={() => {}}
         onRemoveQueuedEditAttachment={() => {}}

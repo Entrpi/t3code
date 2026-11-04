@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { copySorted } from "@t3tools/shared/Array";
 
+import { activeTurnSteering, type ActiveTurnSteering } from "./composerDispatch.ts";
 import type { ThreadStructure } from "./models.ts";
 
 type Projection = ThreadStructure;
@@ -36,6 +37,8 @@ export interface ThreadQueueWorkflowState {
   readonly queuedRuns: ReadonlyArray<QueuedThreadRun>;
   readonly isHeld: boolean;
   readonly canPromoteToSteer: boolean;
+  /** How a message sent now reaches the running turn. */
+  readonly steering: ActiveTurnSteering;
   /** The active run is a compaction, so promoting a queued message stops it instead of steering. */
   readonly promoteSkipsCompaction: boolean;
   readonly canSendNow: boolean;
@@ -90,6 +93,10 @@ function resolveThreadProviderSession(projection: Projection): ProviderSession |
       (session) => session.status !== "stopped" && session.status !== "error",
     ) ?? null
   );
+}
+
+export function deriveActiveTurnSteering(projection: Projection): ActiveTurnSteering {
+  return activeTurnSteering(resolveThreadProviderSession(projection)?.capabilities.turns);
 }
 
 export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
@@ -174,6 +181,7 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
       (hasSteerableProviderTurn &&
         (capabilities?.supportsActiveSteering === true ||
           capabilities?.supportsSteeringByInterruptRestart === true)),
+    steering: activeTurnSteering(capabilities),
     promoteSkipsCompaction,
   };
 }

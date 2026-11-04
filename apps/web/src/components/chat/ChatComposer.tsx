@@ -250,6 +250,7 @@ import type {
 } from "../../session-logic";
 import {
   resolveComposerDispatchMode,
+  type ActiveTurnSteering,
   type ComposerDispatchMode,
 } from "@t3tools/client-runtime/state/composer-dispatch";
 import { deriveLatestContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
@@ -375,7 +376,8 @@ export interface ChatComposerProps {
   isRevertingCheckpoint?: boolean;
   sendDisabledReason: string | null;
   isPreparingWorktree: boolean;
-  isCompacting: boolean;
+  /** How a message sent now reaches the running turn; `none` while it compacts. */
+  steering: ActiveTurnSteering;
   bannerItems: readonly ComposerBannerStackItem[];
   resumeCompactionTokens: number | null;
   keepFullHistory: boolean;
@@ -529,7 +531,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isRevertingCheckpoint = false,
     sendDisabledReason: externalSendDisabledReason,
     isPreparingWorktree,
-    isCompacting,
+    steering,
     environmentUnavailable,
     activePendingApproval: incomingPendingApproval,
     pendingApprovals,
@@ -2110,7 +2112,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               running: phase === "running",
               alternateModifier: false,
               activeTurnDefault: followUpBehavior,
-              canSteer: !isCompacting,
+              steering,
             }),
           submissionIntent,
         );
@@ -2133,7 +2135,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         running: phase === "running",
         alternateModifier: event.metaKey || event.ctrlKey,
         activeTurnDefault: followUpBehavior,
-        canSteer: !isCompacting,
+        steering,
       }),
     );
   };
@@ -2145,7 +2147,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         running: phase === "running",
         alternateModifier: false,
         activeTurnDefault: followUpBehavior,
-        canSteer: !isCompacting,
+        steering,
       }),
     );
   };
@@ -2204,7 +2206,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       sendShortcut: settings.sendShortcut,
       routeKind,
       phase,
-      isCompacting,
+      steering,
       followUpBehavior,
       isSoftwareKeyboardOpen,
       planModeUiEnabled,
@@ -3509,7 +3511,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isRunning={phase === "running"}
                     canInterrupt={canInterrupt}
                     followUpBehavior={followUpBehavior}
-                    canSteer={!isCompacting}
+                    steering={steering}
                     alternateShortcutLabel={shortcutLabelForCommand(
                       keybindings,
                       "composer.sendAlternate",

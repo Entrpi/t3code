@@ -1,6 +1,9 @@
 import {
+  activeTurnActionLabel,
   alternateComposerDispatchAction,
+  resolveComposerDispatchMode,
   type ActiveTurnComposerAction,
+  type ActiveTurnSteering,
 } from "@t3tools/client-runtime/state/composer-dispatch";
 
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
@@ -16,46 +19,64 @@ export interface ComposerSendPresentation {
   readonly action: ActiveTurnComposerAction | null;
   readonly alternate: ActiveTurnComposerAction | null;
   readonly offersFollowUpChoice: boolean;
+  readonly steering: ActiveTurnSteering;
 }
-
-const ACTION_LABEL: Record<ActiveTurnComposerAction, string> = {
-  queue: "Queue",
-  steer: "Steer",
-  restart: "Restart",
-};
 
 export function resolveComposerSendPresentation(input: {
   readonly editingQueuedMessage: boolean;
   readonly running: boolean;
-  readonly canSteer: boolean;
+  readonly steering: ActiveTurnSteering;
   readonly followUpBehavior: FollowUpBehavior;
   readonly deliveryDeferred: boolean;
 }): ComposerSendPresentation {
+  const idle = { action: null, alternate: null, offersFollowUpChoice: false };
   if (input.editingQueuedMessage) {
     return {
       label: "Update queued message",
       icon: "checkmark",
-      action: null,
-      alternate: null,
-      offersFollowUpChoice: false,
+      ...idle,
+      steering: input.steering,
     };
   }
   if (!input.running) {
     return {
       label: input.deliveryDeferred ? "Queue" : "Send",
       icon: input.deliveryDeferred ? "tray.and.arrow.up" : "arrow.up",
-      action: null,
-      alternate: null,
-      offersFollowUpChoice: false,
+      ...idle,
+      steering: input.steering,
     };
   }
-  const action: ActiveTurnComposerAction = input.canSteer ? input.followUpBehavior : "queue";
-  const alternate = alternateComposerDispatchAction(action);
+  const action = resolveComposerDispatchMode({
+    running: true,
+    alternateModifier: false,
+    activeTurnDefault: input.followUpBehavior,
+    steering: input.steering,
+  }) as ActiveTurnComposerAction;
+  const alternate = alternateComposerDispatchAction(input.followUpBehavior, input.steering);
   return {
-    label: ACTION_LABEL[action],
-    icon: action === "steer" ? "arrow.turn.left.up" : "list.number",
+    label: activeTurnActionLabel(action, input.steering),
+    icon: action === "queue" ? "list.number" : "arrow.turn.left.up",
     action,
-    alternate: input.canSteer ? alternate : null,
-    offersFollowUpChoice: input.canSteer,
+    alternate,
+    offersFollowUpChoice: alternate !== null,
+    steering: input.steering,
+  };
+}
+
+/** The long-press menu's copy for one way to send while the agent works. */
+export function followUpActionCopy(
+  action: ActiveTurnComposerAction,
+  steering: ActiveTurnSteering,
+): { readonly title: string; readonly subtitle: string } {
+  if (action === "queue") return { title: "Queue", subtitle: "Run after the current turn" };
+  if (activeTurnActionLabel(action, steering) === "Steer") {
+    return { title: "Steer now", subtitle: "Add to what the agent is doing" };
+  }
+  return {
+    title: "Interrupt and send",
+    subtitle:
+      steering === "cancels-tools"
+        ? "Stop running tools and send now"
+        : "Stop the turn and start over with this message",
   };
 }

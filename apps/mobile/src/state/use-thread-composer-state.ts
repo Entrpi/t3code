@@ -80,6 +80,7 @@ import {
 import {
   resolveComposerDispatchMode,
   type ActiveTurnComposerAction,
+  type ActiveTurnSteering,
 } from "@t3tools/client-runtime/state/composer-dispatch";
 import { Atom } from "effect/reactivity";
 import { AsyncResult } from "effect/reactivity";
@@ -358,8 +359,9 @@ export function useThreadComposerState() {
           item.status === "cancelled"),
     );
   })();
-  // A compacting turn cannot take steering input, so follow-ups queue meanwhile.
-  const canSteerActiveTurn = queueWorkflow?.canPromoteToSteer === true && !isCompacting;
+  // A compacting turn, or one whose provider turn has not started, can only queue follow-ups.
+  const activeTurnSteering: ActiveTurnSteering =
+    queueWorkflow?.canPromoteToSteer === true && !isCompacting ? queueWorkflow.steering : "none";
   // A stop or a restart holds the queue, completion wakes included, until it
   // is resumed; the queue sheet lists only the user's own messages.
   const queueHeld = queueWorkflow?.isHeld === true;
@@ -644,12 +646,21 @@ export function useThreadComposerState() {
     // Resolve at send time because outbox delivery may be delayed.
     // Steering uses "auto" so an ended turn queues a run instead of restoring the draft.
     // An approval redirect must steer the waiting turn instead of queueing behind it.
-    const activeTurnDefault = beforeDispatch !== undefined ? "steer" : followUpBehavior;
-    const followUpAction = resolveComposerDispatchMode({
-      running: activeThreadBusy && canSteerActiveTurn,
-      alternateModifier: followUpOverride !== undefined && followUpOverride !== activeTurnDefault,
-      activeTurnDefault,
-    });
+    const followUpAction =
+      activeThreadBusy && followUpOverride !== undefined
+        ? followUpOverride
+        : beforeDispatch !== undefined
+          ? resolveComposerDispatchMode({
+              running: activeThreadBusy && activeTurnSteering !== "none",
+              alternateModifier: false,
+              activeTurnDefault: "steer",
+            })
+          : resolveComposerDispatchMode({
+              running: activeThreadBusy,
+              alternateModifier: false,
+              activeTurnDefault: followUpBehavior,
+              steering: activeTurnSteering,
+            });
     const setupRunning = [selectedThreadActivityRun?.status, selectedThreadRuntime?.status].some(
       (status) => status === "preparing" || status === "starting",
     );
@@ -657,8 +668,8 @@ export function useThreadComposerState() {
       ? "queue"
       : followUpAction === "auto"
         ? null
-        : followUpAction === "queue"
-          ? "queue"
+        : followUpAction === "queue" || followUpAction === "restart"
+          ? followUpAction
           : "auto";
 
     const metadata = makeQueuedMessageMetadata();
@@ -777,7 +788,7 @@ export function useThreadComposerState() {
     isCompacting,
     composerDraftKey,
     followUpBehavior,
-    canSteerActiveTurn,
+    activeTurnSteering,
     queueHeld,
     resumableRunId,
     queuedRunEdit,
