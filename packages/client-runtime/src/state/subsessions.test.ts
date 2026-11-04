@@ -13,6 +13,7 @@ import { v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import {
   activeSubagentCount,
   isListedThread,
+  subsessionCountMisses,
   subsessionDescendants,
   subsessionTree,
   threadSubsessionState,
@@ -133,6 +134,17 @@ describe("subsessions", () => {
       [key("parent"), ["session", "nested"]],
       [key("session"), ["nested"]],
     ]);
+  });
+
+  it("names each row whose listed children disagree with its server count", () => {
+    const nested = {
+      ...child("middle"),
+      subagentCounts: { providerNative: 0, appOwned: 2 },
+    };
+    const tree = subsessionTree(parent, [nested], []);
+    expect(subsessionCountMisses(tree, parent, 1)).toBe("middle:2");
+    expect(subsessionCountMisses(tree, parent, 2)).toBe("parent:2,middle:2");
+    expect(subsessionCountMisses([], parent, 0)).toBe("");
   });
 
   it("lists settled subsessions with threads and keeps open ones under their parent", () => {

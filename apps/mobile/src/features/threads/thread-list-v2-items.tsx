@@ -65,6 +65,13 @@ import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regenerati
 import { canTurnThreadIntoProject, turnThreadIntoProject } from "./turnThreadIntoProject";
 import { isSubsessionAction, organizeSubsession, subsessionMenuActions } from "./subsessionActions";
 import { threadSubsessionState } from "@t3tools/client-runtime/state/subsessions";
+import { useSubsessions } from "../../state/entities";
+import {
+  ActiveSubagentCount,
+  SubsessionCaret,
+  ThreadSubsessionList,
+  useSubsessionsExpanded,
+} from "./ThreadSubsessionList";
 import { threadCanArchive } from "../home/threadArchive";
 import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
@@ -710,6 +717,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onMoveThread,
   } = props;
   const snoozedRow = props.snoozed === true;
+  const subsessions = useSubsessions({ environmentId: thread.environmentId, threadId: thread.id });
+  const openSubsessionCount = subsessions.filter(
+    (child) =>
+      child.lineage.parentThreadId === thread.id &&
+      child.archivedAt === null &&
+      child.settledOverride !== "settled",
+  ).length;
+  // Older servers send no count; the shell's own copies still show.
+  const subsessionCount = Math.max(thread.subagentCounts?.appOwned ?? 0, openSubsessionCount);
+  const subsessionsExpanded = useSubsessionsExpanded(thread);
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
 
@@ -1175,6 +1192,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {thread.title}
         </Text>
         <View className="flex-row items-center gap-1.5" style={{ minHeight: titleLineHeight }}>
+          {subsessionCount > 0 ? (
+            <SubsessionCaret
+              count={subsessionCount}
+              expanded={subsessionsExpanded.expanded}
+              onToggle={subsessionsExpanded.toggle}
+            />
+          ) : null}
+          <ActiveSubagentCount thread={thread} />
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           {pinnedRow ? (
             <SymbolView
@@ -1471,6 +1496,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               />
             ) : null}
           </View>
+          {subsessionCount > 0 ? (
+            <SubsessionCaret
+              count={subsessionCount}
+              expanded={subsessionsExpanded.expanded}
+              onToggle={subsessionsExpanded.toggle}
+            />
+          ) : null}
+          <ActiveSubagentCount thread={thread} />
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           <Text
             className={cn(
@@ -1491,8 +1524,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       </RowPressable>
     );
 
+  const subsessionList =
+    subsessionCount > 0 && subsessionsExpanded.expanded ? (
+      <ThreadSubsessionList
+        parent={thread}
+        known={subsessions}
+        count={subsessionCount}
+        onSelectThread={onSelectThread}
+        onSettleThread={onSettleThread}
+      />
+    ) : null;
+
   if (!canOperateThread)
-    return <View style={rowAppearance.swipeContainerStyle}>{rowContent(() => {})}</View>;
+    return (
+      <View>
+        <View style={rowAppearance.swipeContainerStyle}>{rowContent(() => {})}</View>
+        {subsessionList}
+      </View>
+    );
 
   return (
     <View collapsable={false}>
@@ -1523,6 +1572,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           </Menu>
         )}
       </ThreadSwipeable>
+      {subsessionList}
     </View>
   );
 });

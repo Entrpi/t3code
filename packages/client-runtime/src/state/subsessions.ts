@@ -156,3 +156,25 @@ export function threadSubsessionState(
     ? "attached"
     : null;
 }
+
+/**
+ * Where a tree disagrees with the server's subsession counts, as one key. A family read lasts the
+ * shell generation, so a changed key means it missed or kept a child and should be read again.
+ */
+export function subsessionCountMisses(
+  nodes: ReadonlyArray<SubsessionNode>,
+  parentId: ThreadId,
+  expected: number,
+): string {
+  const misses = (level: ReadonlyArray<SubsessionNode>, id: ThreadId, count: number): string[] => [
+    ...(level.length === count ? [] : [`${id}:${count}`]),
+    ...level.flatMap((node) =>
+      misses(
+        node.children,
+        node.thread.id,
+        node.thread.subagentCounts?.appOwned ?? node.children.length,
+      ),
+    ),
+  ];
+  return misses(nodes, parentId, expected).join(",");
+}

@@ -209,6 +209,7 @@ import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
 import { ThreadSideChatsRow } from "./ThreadSideChatsRow";
+import { ThreadSubsessionsRow } from "./ThreadSubsessionsRow";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
@@ -1707,6 +1708,9 @@ function ThreadDetailBody(
                       threadRef={props.selectedThreadDetailRef}
                       canOperateThread={props.canOperateThread}
                     />
+                    {props.draftMode ? null : (
+                      <ThreadSubsessionsRow thread={props.selectedThread} />
+                    )}
                     {props.draftMode ? null : (
                       <ThreadSideChatsRow
                         environmentId={props.environmentId}

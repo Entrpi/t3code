@@ -35,6 +35,7 @@ import {
   activeSubagentCount,
   moreUrgentSubsessionState,
   subsessionState,
+  subsessionCountMisses,
   subsessionTree,
   type SubsessionNode,
 } from "@t3tools/client-runtime/state/subsessions";
@@ -92,21 +93,6 @@ const INDENTED_DEPTHS = 3;
 
 const SUBSESSION_DOT = { waiting: "bg-warning", working: "bg-info" } as const;
 
-const familyMisses = (
-  nodes: ReadonlyArray<SubsessionNode>,
-  parentId: ThreadId,
-  expected: number,
-): string[] => [
-  ...(nodes.length === expected ? [] : [`${parentId}:${expected}`]),
-  ...nodes.flatMap((node) =>
-    familyMisses(
-      node.children,
-      node.thread.id,
-      node.thread.subagentCounts?.appOwned ?? node.children.length,
-    ),
-  ),
-];
-
 /** A thread's open subsessions under its card, each with its own under a caret. */
 export function SidebarSubsessionList(props: {
   readonly environmentId: EnvironmentId;
@@ -126,7 +112,7 @@ export function SidebarSubsessionList(props: {
   );
   const collapsedKeys = useUiStateStore((state) => state.collapsedSubsessionThreadKeys);
   const setSubsessionsCollapsed = useUiStateStore((state) => state.setSubsessionsCollapsed);
-  const misses = familyMisses(tree, parentId, count).join(",");
+  const misses = subsessionCountMisses(tree, parentId, count);
   const readAgainFor = useRef<string | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a family read lasts the shell generation, so the server's counts say when it missed or kept a child
   useEffect(() => {

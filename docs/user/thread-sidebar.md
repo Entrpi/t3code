@@ -169,24 +169,29 @@ A thread can start two kinds of child:
 A thread's card lists its subsessions under a caret, open by default; the sidebar remembers the
 cards you collapse. Each row shows its last activity, and a blue or amber dot while it is working
 or waiting for you. A subsession that starts its own lists them under a caret on its row; while
-that row is collapsed, its dot also shows what the hidden ones are doing. Subagents show only as a count of those working right now, beside the thread
-or subsession running them. Turn the list off in **Settings → General → Show subsessions under
-their thread**, or right-click the project filter button.
+that row is collapsed, its dot also shows what the hidden ones are doing. Subagents show only as a
+count of those working right now, beside the thread or subsession running them. Turn the list off
+in **Settings → General → Show subsessions under their thread**, or right-click the project filter
+button.
+
+The mobile thread list shows subsessions the same way; long-press a row for its actions. Above the
+composer, a subsession links back to its parent session, and a thread lists its open subsessions.
 
 Settle a subsession from its row like any thread. It moves to the **Settled** section as a card
 of its own, its open subsessions with it, and goes back under its thread when you un-settle it.
 
 ### Detach a subsession to top level
 
-When a subsession turns into work of its own, right-click it under its thread, or open its thread
-menu, and choose **Detach to top level**. It becomes a normal thread in your list with the same
-history. If it is still working on the task its parent gave it, that task still reports back to
-the parent; anything you send it afterwards does not.
+When a subsession turns into work of its own, right-click it under its thread (long-press on
+mobile), or open its thread menu, and choose **Detach to top level**. It becomes a normal thread
+in your list with the same history. If it is still working on the task its parent gave it, that
+task still reports back to the parent; anything you send it afterwards does not.
 
 A detached session stays beside its old parent in the sidebar, or stands on its own, as set in
-**Settings → General → Detached subsessions**. Change it for one thread from its menu with
-**Group with parent** or **Separate from parent**. **Reattach to parent** makes it a subsession
-again. A detached session keeps working in its parent's folder or worktree.
+**Settings → General → Detached subsessions**; on mobile it stays beside its parent. Change it
+for one thread from its menu with **Group with parent** or **Separate from parent**. **Reattach
+to parent** makes it a subsession again. A detached session keeps working in its parent's folder
+or worktree.
 
 ### Group threads by project (beta)
 
