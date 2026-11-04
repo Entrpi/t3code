@@ -16,6 +16,8 @@ import {
   isListedThreadLineage,
   isLiveSubagentShell,
   isOlderSettledThreadShell,
+  isSettledListedThread,
+  isSubsessionThread,
   OrchestrationProjectShell as ProjectShellSchema,
   OrchestrationV2ThreadShell as ThreadShellSchema,
   subagentOriginOf,
@@ -76,7 +78,7 @@ function buildActiveShellSnapshot(input: {
 
 type ShellTrimRow = Pick<
   OrchestrationV2ThreadShell,
-  "id" | "projectId" | "lineage" | "settledOverride" | "settledAt"
+  "id" | "projectId" | "lineage" | "creationSource" | "settledOverride" | "settledAt"
 >;
 
 /**
@@ -101,11 +103,8 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
     if (row.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(row.id);
       if (row.lineage.parentThreadId) subagentParentIds.add(row.lineage.parentThreadId);
-    } else if (
-      isListedThreadLineage(row.lineage) &&
-      row.settledOverride === "settled" &&
-      row.settledAt !== null
-    ) {
+    }
+    if (isSettledListedThread(row) && row.settledOverride === "settled" && row.settledAt !== null) {
       settledTimes.push(DateTime.toEpochMillis(row.settledAt));
     }
   }
@@ -128,12 +127,21 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
   };
 }
 
+/** A settled subsession is listed with settled threads, so it needs no parent row above it. */
+function isSettledSubsession(
+  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "creationSource" | "settledOverride">,
+): boolean {
+  return isSubsessionThread(thread) && thread.settledOverride === "settled";
+}
+
 function hiddenChildAncestorIds(
-  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "lineage">>,
+  threads: ReadonlyArray<
+    Pick<OrchestrationV2ThreadShell, "lineage" | "creationSource" | "settledOverride">
+  >,
 ) {
   const ancestorIds = new Set<string>();
   for (const thread of threads) {
-    if (isListedThreadLineage(thread.lineage)) continue;
+    if (isListedThreadLineage(thread.lineage) || isSettledSubsession(thread)) continue;
     if (thread.lineage.parentThreadId !== null) ancestorIds.add(thread.lineage.parentThreadId);
     ancestorIds.add(thread.lineage.rootThreadId);
   }
@@ -147,6 +155,7 @@ function omitIdleSubagentShellsWith(
   return threads.filter(
     (thread) =>
       thread.lineage.relationshipToParent !== "subagent" ||
+      isSettledSubsession(thread) ||
       isLiveSubagentShell(thread) ||
       facts.subagentParentIds.has(thread.id),
   );
@@ -187,7 +196,8 @@ function omitOlderSettledShellsWith(
 /**
  * Idle subagent children have no sidebar row, so clients that opt in read them from their thread
  * family instead. A child stays while it is live or the parent of another child, so the request
- * and working walks over shell rows never meet a gap in a nested chain.
+ * and working walks over shell rows never meet a gap in a nested chain. A settled subsession
+ * stays too, under the settled cut, since it is listed with settled threads.
  */
 export function omitIdleSubagentShells(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
@@ -214,7 +224,7 @@ export function activeShellRowsForSubscriber(
 }
 
 /**
- * Opted-in snapshots keep the 25 newest settled top-level threads (and ties) and count the rest per
+ * Opted-in snapshots keep the 25 newest settled threads and subsessions (and ties) and count the rest per
  * project in `olderSettled`; clients page them with `getOlderSettledThreads`. Older rows stay while
  * pinned, snoozed, live, or above a kept subagent or side chat, so walks over shell rows still find
  * them.
@@ -263,7 +273,10 @@ function shellSubscriberThreadIds(
   const subagents = index.filter(
     (entry) =>
       entry.lineage.relationshipToParent === "subagent" &&
-      (!options.omitIdleSubagents || entry.mayBeLive || facts.subagentParentIds.has(entry.id)),
+      (!options.omitIdleSubagents ||
+        isSettledSubsession(entry) ||
+        entry.mayBeLive ||
+        facts.subagentParentIds.has(entry.id)),
   );
   const ancestorIds = hiddenChildAncestorIds([
     ...subagents,
@@ -271,20 +284,23 @@ function shellSubscriberThreadIds(
   ]);
   const keptSubagentIds = new Set(subagents.map((entry) => entry.id));
   const beforeMs = facts.olderSettledBeforeMs;
+  const keptBySettledCut = (entry: ActiveShellIndexEntry) =>
+    !options.omitOlderSettled ||
+    beforeMs === undefined ||
+    !isOlderSettledThreadShell(entry, beforeMs) ||
+    entry.pinnedAt != null ||
+    entry.snoozedUntil != null ||
+    entry.mayBeLive ||
+    ancestorIds.has(entry.id);
+  // Subsessions also take the settled cut, like top-level threads.
   return index.flatMap((entry) =>
-    entry.lineage.relationshipToParent === "subagent"
-      ? keptSubagentIds.has(entry.id)
-        ? [entry.id]
-        : []
-      : !options.omitOlderSettled ||
-          beforeMs === undefined ||
-          !isOlderSettledThreadShell(entry, beforeMs) ||
-          entry.pinnedAt != null ||
-          entry.snoozedUntil != null ||
-          entry.mayBeLive ||
-          ancestorIds.has(entry.id)
-        ? [entry.id]
-        : [],
+    (
+      entry.lineage.relationshipToParent === "subagent"
+        ? keptSubagentIds.has(entry.id) && (!isSubsessionThread(entry) || keptBySettledCut(entry))
+        : keptBySettledCut(entry)
+    )
+      ? [entry.id]
+      : [],
   );
 }
 
@@ -473,15 +489,22 @@ function subagentLifecycleOf(event: OrchestrationV2StoredEvent["event"]): Subage
 }
 
 /**
- * Each active subagent's parent. A subscription keeps this from its snapshot and the lifecycle
- * events after it, so parent shells carry `subagentCounts` while idle children stay out.
+ * Each active subagent's parent, leaving out settled subsessions. A subscription keeps this from
+ * its snapshot and the lifecycle events after it, so parent shells carry `subagentCounts` while
+ * idle children stay out.
  */
 export function subagentParentsOf(
-  rows: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage" | "creationSource">>,
+  rows: ReadonlyArray<
+    Pick<OrchestrationV2ThreadShell, "id" | "lineage" | "creationSource" | "settledOverride">
+  >,
 ): Map<string, SubagentParent> {
   const parents = new Map<string, SubagentParent>();
   for (const row of rows) {
-    if (row.lineage.relationshipToParent === "subagent" && row.lineage.parentThreadId !== null) {
+    if (
+      row.lineage.relationshipToParent === "subagent" &&
+      row.lineage.parentThreadId !== null &&
+      !isSettledSubsession(row)
+    ) {
       parents.set(row.id, {
         parentThreadId: row.lineage.parentThreadId,
         origin: subagentOriginOf(row.creationSource),
@@ -499,7 +522,12 @@ export function trackSubagentParent(
   const thread = threadPayloadOf(stored.event);
   if (thread === undefined) return;
   const subagent = subagentLifecycleOf(stored.event);
-  if (subagent === null || thread.archivedAt !== null || thread.deletedAt !== null) {
+  if (
+    subagent === null ||
+    thread.archivedAt !== null ||
+    thread.deletedAt !== null ||
+    isSettledSubsession(thread)
+  ) {
     parents.delete(stored.event.threadId);
   } else {
     parents.set(stored.event.threadId, subagent);
@@ -588,7 +616,10 @@ export function toShellApplicationEvent(stored: ApplicationStoredEvent): ShellAp
     stored.event.type === "thread.unarchived" ||
     stored.event.type === "thread.deleted" ||
     stored.event.type === "thread.detached" ||
-    stored.event.type === "thread.reattached";
+    stored.event.type === "thread.reattached" ||
+    // A settled subsession leaves its parent's card for the Settled section.
+    stored.event.type === "thread.settled" ||
+    stored.event.type === "thread.unsettled";
   const parentThreadId = changesParentCount
     ? (subagent?.parentThreadId ?? threadPayloadOf(stored.event)?.lineage.detachedFrom?.threadId)
     : undefined;

@@ -110,7 +110,9 @@ describe("subagent shell events", () => {
       expect(toShellApplicationEvent(event)).toEqual({
         sequence: 1,
         event: { threadId: childId },
-        ...(["thread.created", "thread.detached", "thread.reattached"].includes(type)
+        ...(["thread.created", "thread.detached", "thread.reattached", "thread.settled"].includes(
+          type,
+        )
           ? { parentThreadId: parentId }
           : {}),
       });
@@ -221,6 +223,7 @@ describe("omitIdleSubagentShells", () => {
         relationshipToParent: parent === null ? null : "subagent",
         rootThreadId: ThreadId.make("root"),
       },
+      creationSource: "provider",
       status: "completed",
       activityRunStatus: null,
       pendingRuntimeRequest: null,
@@ -228,7 +231,7 @@ describe("omitIdleSubagentShells", () => {
       ...overrides,
     });
 
-  it("drops idle leaf children but keeps live ones and the middle of nested chains", () => {
+  it("drops idle leaf children but keeps live ones, settled subsessions and nested chains", () => {
     const threads = [
       row("root", null),
       row("idle", "root"),
@@ -247,6 +250,13 @@ describe("omitIdleSubagentShells", () => {
       // Idle, but a woken grandchild walks through it to reach the root's badge.
       row("middle", "root"),
       row("grandchild", "middle"),
+      row("idle-session", "root", { creationSource: "mcp" }),
+      // Listed with settled threads, under the settled cut.
+      row("settled-session", "root", {
+        creationSource: "mcp",
+        settledOverride: "settled",
+        settledAt: DateTime.makeUnsafe(0),
+      }),
     ];
     expect(omitIdleSubagentShells(threads).map((thread) => thread.id)).toEqual([
       "root",
@@ -255,6 +265,7 @@ describe("omitIdleSubagentShells", () => {
       "asking",
       "background",
       "middle",
+      "settled-session",
     ]);
   });
 
@@ -290,6 +301,8 @@ describe("subagent counts", () => {
       row("native", "root", "provider"),
       row("grandchild", "running", "provider"),
       row("lonely", null),
+      // Settled subsessions are listed with settled threads, not under their parent.
+      { ...row("settled", "root"), settledOverride: "settled" },
     ]);
     const counts = subagentCountsOf(parents);
     const stamped = [row("root", null), row("running", "root"), row("lonely", null)].map((thread) =>
@@ -441,6 +454,15 @@ describe("omitOlderSettledShells", () => {
         settledOverride: null,
         settledAt: null,
       }),
+      // An older settled subsession takes the cut like a thread, and its parent stays.
+      row("session", 30, {
+        lineage: {
+          parentThreadId: ThreadId.make("parent"),
+          relationshipToParent: "subagent",
+          rootThreadId: ThreadId.make("parent"),
+        },
+        creationSource: "mcp",
+      }),
       row("side-chat-parent", 30),
       row("side-chat", null, {
         lineage: {
@@ -460,7 +482,7 @@ describe("omitOlderSettledShells", () => {
       "side-chat-parent",
       "side-chat",
     ]);
-    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 5 }]);
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 6 }]);
   });
 });
 

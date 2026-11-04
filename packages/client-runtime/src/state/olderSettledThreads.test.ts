@@ -70,6 +70,7 @@ const row = (
       relationshipToParent: input.subagent === true ? "subagent" : null,
       rootThreadId: ThreadId.make(id),
     },
+    creationSource: input.subagent === true ? "provider" : "web",
     settledOverride: input.settledDay === undefined ? null : "settled",
     settledAt: input.settledDay === undefined ? null : DateTime.makeUnsafe(input.settledDay * DAY),
     createdAt: DateTime.makeUnsafe((input.createdDay ?? 1) * DAY),

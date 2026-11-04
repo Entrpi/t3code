@@ -7274,6 +7274,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         WHERE deleted_at IS NULL
           AND json_extract(payload_json, '$.archivedAt') IS NULL
           AND json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
+          -- Settled subsessions are listed with settled threads, not counted under their parent.
+          AND NOT (
+            json_extract(payload_json, '$.creationSource') IS NOT 'provider'
+            AND json_extract(payload_json, '$.settledOverride') IS 'settled'
+          )
       `;
       return rows.map((row) => ({
         threadId: ThreadId.make(row.thread_id),
@@ -7424,7 +7429,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         FROM orchestration_v2_projection_threads t
         WHERE t.deleted_at IS NULL
           AND json_extract(t.payload_json, '$.archivedAt') IS NULL
-          AND json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
+          -- isSettledListedThread: top-level threads and subsessions.
+          AND (
+            json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
+            OR json_extract(t.payload_json, '$.creationSource') IS NOT 'provider'
+          )
           AND json_extract(t.payload_json, '$.lineage.sideChat') IS NOT 1
           AND json_extract(t.payload_json, '$.settledOverride') = 'settled'
           AND json_extract(t.payload_json, '$.settledAt') IS NOT NULL${

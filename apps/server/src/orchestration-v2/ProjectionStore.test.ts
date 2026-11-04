@@ -1945,7 +1945,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
       readonly name: string;
       readonly settledDay: number | null;
       readonly project?: string;
-      readonly subagent?: boolean;
+      readonly subagent?: "provider" | "mcp";
       readonly archived?: boolean;
       readonly snoozedUntilDay?: number;
     }) =>
@@ -1956,7 +1956,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
         occurredAt: now,
         payload: {
           createdBy: "user",
-          creationSource: "web",
+          creationSource: input.subagent ?? "web",
           id: id(input.name),
           projectId: ProjectId.make(input.project ?? "project:a"),
           title: input.name,
@@ -1968,9 +1968,9 @@ it.effect("SQL list older settled threads below a cursor", () =>
           worktreePath: null,
           activeProviderThreadId: null,
           lineage: {
-            parentThreadId: input.subagent === true ? id("b") : null,
-            relationshipToParent: input.subagent === true ? "subagent" : null,
-            rootThreadId: input.subagent === true ? id("b") : id(input.name),
+            parentThreadId: input.subagent === undefined ? null : id("b"),
+            relationshipToParent: input.subagent === undefined ? null : "subagent",
+            rootThreadId: input.subagent === undefined ? id(input.name) : id("b"),
           },
           forkedFrom: null,
           createdAt: now,
@@ -1990,7 +1990,9 @@ it.effect("SQL list older settled threads below a cursor", () =>
     yield* createThread({ name: "snoozed", settledDay: 2, snoozedUntilDay: 30 });
     yield* createThread({ name: "recent", settledDay: 20 });
     yield* createThread({ name: "unsettled", settledDay: null });
-    yield* createThread({ name: "child", settledDay: 1, subagent: true });
+    yield* createThread({ name: "child", settledDay: 1, subagent: "provider" });
+    // Settled subsessions list with settled threads.
+    yield* createThread({ name: "session", settledDay: 1, subagent: "mcp" });
     yield* createThread({ name: "archived", settledDay: 1, archived: true });
 
     const list = (
@@ -2004,7 +2006,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
     assert.sameDeepMembers(
       [...(yield* list(before, 0)).counts],
       [
-        { projectId: ProjectId.make("project:a"), count: 4 },
+        { projectId: ProjectId.make("project:a"), count: 5 },
         { projectId: ProjectId.make("project:b"), count: 1 },
       ],
     );
@@ -2012,13 +2014,13 @@ it.effect("SQL list older settled threads below a cursor", () =>
     assert.sameDeepMembers(
       [...(yield* list({ settledAt: DateTime.formatIso(at(4)) }, 0)).counts],
       [
-        { projectId: ProjectId.make("project:a"), count: 1 },
+        { projectId: ProjectId.make("project:a"), count: 2 },
         { projectId: ProjectId.make("project:b"), count: 1 },
       ],
     );
     // The cursor is the last row: the tie on day 4 continues by id.
     const next = yield* list({ settledAt: DateTime.formatIso(at(4)), threadId: id("b") }, 10);
-    assert.deepEqual(next.threadIds, [id("c"), id("d"), id("snoozed")]);
+    assert.deepEqual(next.threadIds, [id("c"), id("d"), id("snoozed"), id("session")]);
     assert.deepEqual(yield* list(before, 25, []), { threadIds: [], counts: [] });
     yield* assertShellIndexCoversShells();
     const scoped = yield* list(before, 0, [ProjectId.make("project:b")]);
@@ -2316,6 +2318,7 @@ it.effect("lists only active subagents and their parents without loading shell d
       ["parent", null, null, null, "web"],
       ["active-subagent", "subagent", null, null, "mcp"],
       ["active-native-subagent", "subagent", null, null, "provider"],
+      ["settled-subsession", "subagent", null, null, "mcp"],
       ["archived-subagent", "subagent", createdAt, null, "mcp"],
       ["deleted-subagent", "subagent", null, createdAt, "mcp"],
     ] as const) {
@@ -2332,6 +2335,7 @@ it.effect("lists only active subagents and their parents without loading shell d
               parentThreadId: relationship === null ? null : "parent",
             },
             creationSource,
+            ...(id === "settled-subsession" ? { settledOverride: "settled" } : {}),
             archivedAt,
           })}
         )

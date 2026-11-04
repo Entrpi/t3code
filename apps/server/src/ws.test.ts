@@ -570,6 +570,7 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
         settledOverride: settledDaysAgo === null ? null : "settled",
         settledAt:
           settledDaysAgo === null ? null : DateTime.makeUnsafe(-settledDaysAgo * 86_400_000),
+        creationSource: parent === null ? "web" : "provider",
         lineage: {
           parentThreadId: parent === null ? null : ThreadId.make(parent),
           relationshipToParent: parent === null ? null : "subagent",

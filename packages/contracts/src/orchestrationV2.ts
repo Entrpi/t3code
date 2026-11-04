@@ -540,6 +540,20 @@ export function isProviderNativeSubagentThread(
   return thread.lineage.relationshipToParent === "subagent" && thread.creationSource === "provider";
 }
 
+/** A delegated child: a subsession its parent handed work to, not a provider-native subagent. */
+export function isSubsessionThread(
+  thread: Pick<OrchestrationV2AppThread, "lineage" | "creationSource">,
+): boolean {
+  return thread.lineage.relationshipToParent === "subagent" && thread.creationSource !== "provider";
+}
+
+/** Settled subsessions are listed with settled threads; un-settled, they return under their parent. */
+export function isSettledListedThread(
+  thread: Pick<OrchestrationV2AppThread, "lineage" | "creationSource">,
+): boolean {
+  return isListedThreadLineage(thread.lineage) || isSubsessionThread(thread);
+}
+
 /** A subagent thread's origin: providers create their native children, T3 its delegated ones. */
 export const subagentOriginOf = (creationSource: string): OrchestrationV2SubagentOrigin =>
   creationSource === "provider" ? "provider_native" : "app_owned";
@@ -2242,15 +2256,18 @@ export function isLiveSubagentShell(
 }
 
 /**
- * A settled top-level thread settled before `beforeMs`. Shells that omit older settled threads
- * count every such thread, so the server and clients share this one rule.
+ * A settled top-level thread or subsession settled before `beforeMs`. Shells that omit older
+ * settled threads count every such thread, so the server and clients share this one rule.
  */
 export function isOlderSettledThreadShell(
-  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt">,
+  thread: Pick<
+    OrchestrationV2ThreadShell,
+    "lineage" | "creationSource" | "settledOverride" | "settledAt"
+  >,
   beforeMs: number,
 ): boolean {
   return (
-    isListedThreadLineage(thread.lineage) &&
+    isSettledListedThread(thread) &&
     thread.settledOverride === "settled" &&
     thread.settledAt !== null &&
     DateTime.toEpochMillis(thread.settledAt) < beforeMs
