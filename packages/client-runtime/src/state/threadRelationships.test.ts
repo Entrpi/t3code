@@ -183,6 +183,8 @@ describe("thread relationships", () => {
           thread: { id: parent },
           subagents: [{ childThreadId: child, status: "completed" }],
           contextTransfers: [
+            // The spawn's own context transfer, which must not stand in for the child.
+            { sourceThreadId: parent, targetThreadId: child, status: "consumed" },
             {
               sourceThreadId: child,
               targetThreadId: transferTarget,
@@ -195,6 +197,17 @@ describe("thread relationships", () => {
       expect(graph.nodes.get(child)?.thread?.archivedAt).not.toBeNull();
       expect(graph.nodes.get(transferTarget)?.missing).toBe(true);
       expect(graph.edges.some((edge) => edge.kind === "subagent")).toBe(!detached);
+      const childRow = immediateThreadRelationships(graph, parent).find(
+        (row) => row.threadId === child,
+      );
+      expect(childRow?.edge).toMatchObject({
+        kind: detached ? "detached" : "subagent",
+        status: "completed",
+      });
+      expect(
+        immediateThreadRelationships(graph, child).find((row) => row.threadId === parent)?.edge
+          .kind,
+      ).toBe(detached ? "detached" : "subagent");
       expect(graph.edges).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

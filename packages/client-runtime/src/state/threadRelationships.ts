@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
+export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "detached" | "transfer";
 
 export interface ThreadRelationshipNode {
   readonly threadId: ThreadId;
@@ -86,6 +86,17 @@ export function deriveThreadRelationshipGraph(input: {
       ? [...threads, { ...selectedThread, activityRunStatus: null, status: null }]
       : threads;
   for (const thread of lineageThreads) {
+    // Added before task history, so it wins over the spawn's context transfer.
+    const detachedFrom = thread.lineage.detachedFrom?.threadId;
+    if (detachedFrom !== undefined) {
+      addEdge({
+        sourceThreadId: detachedFrom,
+        targetThreadId: thread.id,
+        kind: "detached",
+        status: thread.activityRunStatus ?? thread.status,
+      });
+      continue;
+    }
     const parentThreadId =
       thread.forkedFrom?.type === "run"
         ? thread.forkedFrom.threadId
