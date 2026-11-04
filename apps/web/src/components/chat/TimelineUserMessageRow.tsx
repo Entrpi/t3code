@@ -40,7 +40,7 @@ import {
   PencilIcon,
 } from "lucide-react";
 import { Link as LinkIconNode } from "lucide";
-import { Button, InlineButton } from "../ui/button";
+import { Button, ButtonRevealLabel, InlineButton } from "../ui/button";
 import { ModelSwitchRow } from "./V2LifecycleRow";
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
 import { AttachmentImage } from "../media/AttachmentImage";
@@ -1131,8 +1131,9 @@ function EditUserMessageButton({ onEdit }: { onEdit: () => void }) {
         }
       >
         <PencilIcon className="size-3" />
+        <ButtonRevealLabel>Edit</ButtonRevealLabel>
       </TooltipTrigger>
-      <TooltipPopup side="top">Edit</TooltipPopup>
+      <TooltipPopup side="top">Change this prompt and send it again</TooltipPopup>
     </Tooltip>
   );
 }
@@ -1163,8 +1164,9 @@ function RevertUserMessageButton({
         }
       >
         <PencilIcon className="size-3" />
+        <ButtonRevealLabel>Edit from here</ButtonRevealLabel>
       </TooltipTrigger>
-      <TooltipPopup side="top">Edit from here</TooltipPopup>
+      <TooltipPopup side="top">Rewind to before this prompt</TooltipPopup>
     </Tooltip>
   );
 }
