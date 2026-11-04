@@ -35,6 +35,9 @@ import {
   resolveSidebarDropVerb,
   groupSidebarThreadsByProject,
   clusterSidebarThreadsByLineage,
+  liveSidebarSubagents,
+  liveSidebarSubagentsByParent,
+  sidebarSubagentRows,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
 } from "./Sidebar.logic";
@@ -46,6 +49,7 @@ import {
 import { resolveProjectExpanded } from "../uiStateStore";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -1683,6 +1687,100 @@ describe("clusterSidebarThreadsByLineage", () => {
       ["solo", null],
       // A root id names a thread on one environment only.
       ["other-machine", null],
+    ]);
+  });
+});
+
+describe("sidebar subagents", () => {
+  const shell = (
+    id: string,
+    parent: string | null,
+    overrides: Partial<OrchestrationV2ThreadShell> = {},
+  ) =>
+    ({
+      id: ThreadId.make(id),
+      lineage: {
+        parentThreadId: parent === null ? null : ThreadId.make(parent),
+        relationshipToParent: parent === null ? null : "subagent",
+        rootThreadId: ThreadId.make("root"),
+      },
+      createdAt: DateTime.makeUnsafe(`2026-11-04T10:0${id.length % 10}:00.000Z`),
+      archivedAt: null,
+      status: "completed",
+      activityRunStatus: null,
+      pendingRuntimeRequest: null,
+      pendingBackgroundTasks: [],
+      title: id,
+      ...overrides,
+    }) as OrchestrationV2ThreadShell;
+
+  it("finds working subagents in their own shell and native ones in the parent's run or pending work", () => {
+    const delegated = shell("delegated", "root", { activityRunStatus: "running" });
+    const asking = shell("asking", "root", {
+      pendingRuntimeRequest: { kind: "user_input" } as never,
+    });
+    const live = liveSidebarSubagents(
+      {
+        workingSubagents: [
+          { threadId: ThreadId.make("foreground"), title: "In this turn" },
+          { threadId: ThreadId.make("n"), title: null },
+        ],
+        pendingBackgroundTasks: [
+          {
+            kind: "subagent",
+            taskId: "t1",
+            description: "Native",
+            childThreadId: ThreadId.make("n"),
+          },
+          // Already known from its own shell.
+          { kind: "subagent", taskId: "t2", childThreadId: ThreadId.make("delegated") },
+          { kind: "subagent", taskId: "t3", description: "Not projected yet" },
+          { kind: "command", taskId: "t4", description: "npm test" },
+        ],
+      },
+      [delegated, asking],
+    );
+    expect(live).toEqual([
+      { id: "delegated", title: "delegated", state: "running" },
+      { id: "asking", title: "asking", state: "waiting" },
+      { id: "foreground", title: "In this turn", state: "running" },
+      { id: "n", title: "Subagent", state: "running" },
+    ]);
+  });
+
+  it("lists a parent's own active subagents once, working ones first, then newest first", () => {
+    const rows = sidebarSubagentRows(
+      "root",
+      [{ id: ThreadId.make("bb"), title: "live", state: "running" }],
+      [
+        shell("a", "root"),
+        shell("bb", "root", { title: "family row" }),
+        shell("ccc", "root"),
+        shell("archived", "root", {
+          archivedAt: DateTime.makeUnsafe("2026-11-04T11:00:00.000Z"),
+        }),
+        shell("grandchild", "a"),
+        shell("fork", null),
+      ],
+    );
+    expect(rows.map((row) => [row.id, row.title, row.state])).toEqual([
+      ["bb", "live", "running"],
+      ["ccc", "ccc", null],
+      ["a", "a", null],
+    ]);
+  });
+
+  it("groups live subagent shells under their parent's key", () => {
+    const environmentId = EnvironmentId.make("environment-local");
+    const row = (source: OrchestrationV2ThreadShell) => ({ environmentId, source });
+    const running = shell("running", "root", { activityRunStatus: "running" });
+    const byParent = liveSidebarSubagentsByParent([
+      row(shell("root", null, { activityRunStatus: "running" })),
+      row(running),
+      row(shell("idle", "root")),
+    ]);
+    expect([...byParent]).toEqual([
+      [scopedThreadKey(scopeThreadRef(environmentId, ThreadId.make("root"))), [running]],
     ]);
   });
 });

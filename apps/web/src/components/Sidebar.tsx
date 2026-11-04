@@ -1,6 +1,11 @@
 import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { attachSidebarTree } from "../lib/sidebarTree";
-import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type OrchestrationV2ThreadShell,
+  type ScopedProjectRef,
+} from "@t3tools/contracts";
+import { SidebarSubagents } from "@t3tools/contracts/settings";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
@@ -186,6 +191,8 @@ import {
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   clusterSidebarThreadsByLineage,
+  liveSidebarSubagentsByParent,
+  SIDEBAR_SUBAGENTS_LABELS,
   sidebarLineageKey,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
@@ -332,6 +339,8 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
+const NO_SUBAGENTS: readonly OrchestrationV2ThreadShell[] = [];
+const NO_LIVE_SUBAGENTS: ReadonlyMap<string, OrchestrationV2ThreadShell[]> = new Map();
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -1038,6 +1047,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const keepForksTogether = useClientSettings((settings) => settings.sidebarKeepForksTogether);
+  const subagentMode = useClientSettings((settings) => settings.sidebarSubagents);
+  const [expandedSubagentKeys, setExpandedSubagentKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const toggleSubagents = useStableCallback((threadKey: string) =>
+    setExpandedSubagentKeys((keys) => {
+      const next = new Set(keys);
+      if (!next.delete(threadKey)) next.add(threadKey);
+      return next;
+    }),
+  );
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
@@ -1147,6 +1167,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
+  const liveSubagentsByParent =
+    subagentMode === "hidden" ? NO_LIVE_SUBAGENTS : liveSidebarSubagentsByParent(threads);
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1296,19 +1318,44 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   });
   const handleProjectScopeContextMenu = useStableCallback((event: ReactMouseEvent) => {
     const api = readLocalApi();
-    // Project folders always keep forks together.
-    if (!api || boringSidebarEnabled) return;
+    if (!api) return;
     event.preventDefault();
     void (async () => {
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
-          [{ id: "keep-forks-together", label: "Keep forks together", checked: keepForksTogether }],
+          [
+            // Project folders always keep forks together.
+            ...(boringSidebarEnabled
+              ? []
+              : [
+                  {
+                    id: "keep-forks-together",
+                    label: "Keep forks together",
+                    checked: keepForksTogether,
+                  },
+                ]),
+            {
+              id: "subagents",
+              label: "Subagents",
+              children: SidebarSubagents.literals.map((mode) => ({
+                id: `subagents:${mode}`,
+                label: SIDEBAR_SUBAGENTS_LABELS[mode],
+                checked: subagentMode === mode,
+              })),
+            },
+          ],
           { x: event.clientX, y: event.clientY },
         ),
       );
-      if (clicked._tag === "Success" && clicked.value === "keep-forks-together") {
+      if (clicked._tag === "Failure") return;
+      if (clicked.value === "keep-forks-together") {
         void updateClientSettings({ sidebarKeepForksTogether: !keepForksTogether });
+        return;
       }
+      const mode = SidebarSubagents.literals.find(
+        (value) => clicked.value === `subagents:${value}`,
+      );
+      if (mode !== undefined) void updateClientSettings({ sidebarSubagents: mode });
     })();
   });
   const handleProjectFolderContextMenu = useStableCallback(
@@ -3388,6 +3435,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             thread={thread}
                             variant={rowVariant}
                             lineageLink={lineageLinkByKey.get(threadKey) ?? null}
+                            subagentMode={subagentMode}
+                            liveSubagents={liveSubagentsByParent.get(threadKey) ?? NO_SUBAGENTS}
+                            subagentsExpanded={expandedSubagentKeys.has(threadKey)}
+                            onToggleSubagents={toggleSubagents}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||

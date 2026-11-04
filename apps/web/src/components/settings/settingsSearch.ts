@@ -460,6 +460,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["fork lineage group family connector sidebar"],
   },
   {
+    id: "sidebar-subagents",
+    title: "Subagents in the sidebar",
+    to: "/settings/general",
+    searchTerms: ["subagent subsession delegate child agents nested count live sidebar"],
+  },
+  {
     id: "boring-sidebar",
     title: "Boring sidebar (group by project)",
     to: "/settings/labs",

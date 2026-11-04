@@ -22,6 +22,7 @@ import {
   type ResponseStreamingMode,
   type QuitConfirmationMode,
   SidebarProjectSortOrder,
+  SidebarSubagents,
 } from "@t3tools/contracts/settings";
 import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -29,6 +30,7 @@ import { resolvePastedPath } from "@t3tools/shared/path";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
+import { SIDEBAR_SUBAGENTS_LABELS } from "../Sidebar.logic";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
@@ -126,6 +128,7 @@ const SIDEBAR_PROJECT_SORT_ORDER_LABELS: Record<SidebarProjectSortOrder, string>
   manual: "Manual",
 };
 const isSidebarProjectSortOrder = Schema.is(SidebarProjectSortOrder);
+const isSidebarSubagents = Schema.is(SidebarSubagents);
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -486,6 +489,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarKeepForksTogether !== DEFAULT_UNIFIED_SETTINGS.sidebarKeepForksTogether
       ? ["Keep forks together"]
       : []),
+    ...(settings.sidebarSubagents !== DEFAULT_UNIFIED_SETTINGS.sidebarSubagents
+      ? ["Subagents in the sidebar"]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -656,6 +662,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarKeepForksTogether: DEFAULT_UNIFIED_SETTINGS.sidebarKeepForksTogether,
+      sidebarSubagents: DEFAULT_UNIFIED_SETTINGS.sidebarSubagents,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -936,6 +943,43 @@ export function GeneralSettingsPanel() {
               }
               aria-label="Keep forks together"
             />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("sidebar-subagents")}
+          description="Show the subagents a thread starts under it in the sidebar: how many it has, only those still working or waiting for you, or all of them behind a toggle. Right-click the project filter to switch it from the sidebar."
+          resetAction={
+            settings.sidebarSubagents !== DEFAULT_UNIFIED_SETTINGS.sidebarSubagents ? (
+              <SettingResetButton
+                label="subagents in the sidebar"
+                onClick={() =>
+                  updateSettings({ sidebarSubagents: DEFAULT_UNIFIED_SETTINGS.sidebarSubagents })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarSubagents}
+              onValueChange={(value) => {
+                if (isSidebarSubagents(value)) updateSettings({ sidebarSubagents: value });
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-44"
+                aria-label="Subagents in the sidebar"
+              >
+                <SelectValue>{SIDEBAR_SUBAGENTS_LABELS[settings.sidebarSubagents]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {SidebarSubagents.literals.map((mode) => (
+                  <SelectItem hideIndicator key={mode} value={mode}>
+                    {SIDEBAR_SUBAGENTS_LABELS[mode]}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
           }
         />
       </SettingsSection>

@@ -24,10 +24,11 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  type OrchestrationV2ThreadShell,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 
-import type { TimestampFormat } from "@t3tools/contracts/settings";
+import type { SidebarSubagents, TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -77,9 +78,11 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
   hasUnseenCompletion,
+  liveSidebarSubagents,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   type SidebarLineageLink,
+  type SidebarSubagentRow,
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
   shouldRecedeSidebarThread,
@@ -103,6 +106,7 @@ import {
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
 import { useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
+import { SidebarSubagentCount, SidebarSubagentList } from "./SidebarSubagents";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
@@ -534,6 +538,8 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
 }
 
 // Runs under the folder icon, from just inside a lineage's first row to just inside its last.
+const NO_LIVE_SUBAGENTS: ReadonlyArray<SidebarSubagentRow> = [];
+
 const LINEAGE_LINK_CLASS_NAME: Record<SidebarLineageLink, string> = {
   first:
     "before:absolute before:start-4.5 before:top-1 before:bottom-0 before:w-px before:bg-border",
@@ -558,6 +564,12 @@ type SidebarThreadRowProps = {
   variant: "card" | "slim" | "folder" | "folder-multiline";
   // Where an Active row sits in a fork lineage of two or more, for the connector line.
   lineageLink: SidebarLineageLink | null;
+  subagentMode: SidebarSubagents;
+  // This thread's subagents whose own shells say they are working or waiting.
+  liveSubagents: ReadonlyArray<OrchestrationV2ThreadShell>;
+  // Kept by the sidebar, so a row that moves between sections stays open.
+  subagentsExpanded: boolean;
+  onToggleSubagents: (threadKey: string) => void;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1157,8 +1169,34 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       </span>
     ) : null;
   const diff = latestRunDiff(thread);
+  const subagentCount = thread.subagentCount ?? 0;
+  const liveSubagents =
+    props.subagentMode === "hidden"
+      ? NO_LIVE_SUBAGENTS
+      : liveSidebarSubagents(thread, props.liveSubagents);
+  const subagentChip =
+    subagentCount > 0 && (props.subagentMode === "count" || props.subagentMode === "all") ? (
+      <SidebarSubagentCount
+        count={subagentCount}
+        live={liveSubagents}
+        expanded={props.subagentMode === "all" ? props.subagentsExpanded : null}
+        onToggle={() => props.onToggleSubagents(threadKey)}
+      />
+    ) : null;
+  const subagentList =
+    (props.subagentMode === "live" && liveSubagents.length > 0) ||
+    (props.subagentMode === "all" && props.subagentsExpanded && subagentCount > 0) ? (
+      <SidebarSubagentList
+        environmentId={thread.environmentId}
+        parentId={thread.id}
+        live={liveSubagents}
+        all={props.subagentMode === "all"}
+        count={subagentCount}
+      />
+    ) : null;
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
+    subagentChip === null &&
     !thread.branch &&
     !showsScratchMachine &&
     prBadge === null &&
@@ -1185,6 +1223,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ) : (
         <span className="flex-1" />
       )}
+      {subagentChip}
       {terminalStatusIcon}
       {prBadge}
       {diff ? (
@@ -1276,7 +1315,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {draftIndicator}
               {title}
-              {multiline ? titleLineIcons : null}
+              {multiline ? titleLineIcons : subagentChip}
               {pinIndicator}
               {multiline ? null : terminalStatusIcon}
               {isRegeneratingTitle ? (
@@ -1411,6 +1450,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
+        {subagentList}
       </li>
     );
   }
@@ -1614,6 +1654,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
+      {subagentList}
     </li>
   );
 });

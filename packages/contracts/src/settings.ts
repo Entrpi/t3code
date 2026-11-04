@@ -65,6 +65,8 @@ export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
 
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
+export const SidebarSubagents = Schema.Literals(["hidden", "count", "live", "all"]);
+export type SidebarSubagents = typeof SidebarSubagents.Type;
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
@@ -493,6 +495,8 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarWorkingShelfEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Flat sidebar only; project folders always keep forks together.
   sidebarKeepForksTogether: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // How a thread's subagents show under it in the sidebar.
+  sidebarSubagents: SidebarSubagents.pipe(Schema.withDecodingDefault(Effect.succeed("hidden"))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -1827,6 +1831,7 @@ export const ClientSettingsPatch = Schema.Struct({
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarKeepForksTogether: Schema.optionalKey(Schema.Boolean),
+  sidebarSubagents: Schema.optionalKey(SidebarSubagents),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

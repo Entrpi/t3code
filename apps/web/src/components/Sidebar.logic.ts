@@ -19,11 +19,18 @@ import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/sh
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   isListedThreadLineage,
+  isLiveSubagentShell,
   type ContextMenuItem,
   type EnvironmentId,
+  type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
-import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import type {
+  SidebarProjectSortOrder,
+  SidebarSubagents,
+  SidebarThreadSortOrder,
+} from "@t3tools/contracts/settings";
+import * as DateTime from "effect/DateTime";
 import type { AsyncResult } from "effect/reactivity";
 import {
   effectiveSnoozed,
@@ -1056,6 +1063,94 @@ export function groupSidebarThreadsByProject<
     folderByProject.get(`${thread.environmentId}:${thread.projectId}`)?.threads.push(thread);
   }
   return folders.filter((folder) => folder.threads.length > 0 || keepEmpty(folder.group));
+}
+
+export const SIDEBAR_SUBAGENTS_LABELS: Record<SidebarSubagents, string> = {
+  hidden: "Hidden",
+  count: "Count",
+  live: "Working and waiting",
+  all: "All",
+};
+
+export interface SidebarSubagentRow {
+  readonly id: ThreadId;
+  readonly title: string;
+  readonly state: "running" | "waiting" | null;
+}
+
+/**
+ * A parent's subagents that are working or waiting. Delegated ones say so in their own shell;
+ * provider-native ones run inside the parent, so its active run or background work names them.
+ */
+export function liveSidebarSubagents(
+  parent: Pick<SidebarThreadSummary, "pendingBackgroundTasks" | "workingSubagents">,
+  liveShells: ReadonlyArray<OrchestrationV2ThreadShell>,
+): SidebarSubagentRow[] {
+  const rows: SidebarSubagentRow[] = liveShells.map((thread) => ({
+    id: thread.id,
+    title: thread.title,
+    state: thread.pendingRuntimeRequest === null ? "running" : "waiting",
+  }));
+  const known = new Set<string>(rows.map((row) => row.id));
+  const add = (id: ThreadId, title: string | null | undefined) => {
+    if (known.has(id)) return;
+    known.add(id);
+    rows.push({ id, title: title ?? "Subagent", state: "running" });
+  };
+  for (const working of parent.workingSubagents ?? []) add(working.threadId, working.title);
+  for (const task of parent.pendingBackgroundTasks) {
+    if (task.kind === "subagent" && task.childThreadId !== undefined) {
+      add(task.childThreadId, task.description);
+    }
+  }
+  return rows;
+}
+
+/**
+ * A parent's direct subagents for the sidebar: the live ones first, then the family read's
+ * other active ones, most recently started first.
+ */
+export function sidebarSubagentRows(
+  parentId: string,
+  live: ReadonlyArray<SidebarSubagentRow>,
+  family: ReadonlyArray<OrchestrationV2ThreadShell>,
+): SidebarSubagentRow[] {
+  const seen = new Set<string>(live.map((row) => row.id));
+  const rest = family
+    .filter((thread) => {
+      if (
+        thread.lineage.relationshipToParent !== "subagent" ||
+        thread.lineage.parentThreadId !== parentId ||
+        thread.archivedAt !== null ||
+        seen.has(thread.id)
+      ) {
+        return false;
+      }
+      seen.add(thread.id);
+      return true;
+    })
+    .toSorted(
+      (left, right) =>
+        DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
+    );
+  return [...live, ...rest.map((thread) => ({ id: thread.id, title: thread.title, state: null }))];
+}
+
+/** Live subagents by their parent's thread key; the shell sends only these when it omits idle ones. */
+export function liveSidebarSubagentsByParent(
+  threads: ReadonlyArray<Pick<SidebarThreadSummary, "environmentId" | "source">>,
+): Map<string, OrchestrationV2ThreadShell[]> {
+  const byParent = new Map<string, OrchestrationV2ThreadShell[]>();
+  for (const { environmentId, source } of threads) {
+    const { parentThreadId, relationshipToParent } = source.lineage;
+    if (relationshipToParent !== "subagent" || parentThreadId === null) continue;
+    if (!isLiveSubagentShell(source)) continue;
+    const key = scopedThreadKey(scopeThreadRef(environmentId, parentThreadId));
+    const siblings = byParent.get(key);
+    if (siblings === undefined) byParent.set(key, [source]);
+    else siblings.push(source);
+  }
+  return byParent;
 }
 
 export type SidebarLineageLink = "first" | "middle" | "last";
