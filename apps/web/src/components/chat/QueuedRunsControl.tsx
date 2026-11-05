@@ -342,24 +342,12 @@ export function QueuedRunsControl({
                           `Edit in the composer${item.serverIndex === queued.length - 1 && props.editShortcutLabel ? ` (${props.editShortcutLabel})` : ""}`}
                       </TooltipPopup>
                     </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            size="icon-xs"
-                            variant="ghost-muted"
-                            aria-label="Remove queued message"
-                            disabled={item.runId === null || busyRunId !== null}
-                            onClick={() => {
-                              if (item.runId !== null) void remove(item.runId);
-                            }}
-                          />
-                        }
-                      >
-                        <XIcon />
-                      </TooltipTrigger>
-                      <TooltipPopup>Remove from queue</TooltipPopup>
-                    </Tooltip>
+                    <RemoveQueuedRunButton
+                      disabled={item.runId === null || busyRunId !== null}
+                      onRemove={() => {
+                        if (item.runId !== null) void remove(item.runId);
+                      }}
+                    />
                   </>
                 )}
               </QueuedMessage>
@@ -389,6 +377,56 @@ export function QueuedRunsControl({
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** Removes on a second click in place: the first swaps the icon for a confirm button. */
+function RemoveQueuedRunButton(props: {
+  readonly disabled: boolean;
+  readonly onRemove: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  if (!confirming || props.disabled) {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-xs"
+              variant="ghost-muted"
+              aria-label="Remove queued message"
+              disabled={props.disabled}
+              onClick={() => setConfirming(true)}
+            />
+          }
+        >
+          <XIcon />
+        </TooltipTrigger>
+        <TooltipPopup>Remove from queue</TooltipPopup>
+      </Tooltip>
+    );
+  }
+  return (
+    <Button
+      size="xs"
+      variant="destructive-outline"
+      aria-label="Confirm remove queued message"
+      autoFocus
+      onBlur={() => setConfirming(false)}
+      onPointerLeave={() => setConfirming(false)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          setConfirming(false);
+        }
+      }}
+      onClick={() => {
+        setConfirming(false);
+        props.onRemove();
+      }}
+    >
+      Remove
+    </Button>
   );
 }
 
