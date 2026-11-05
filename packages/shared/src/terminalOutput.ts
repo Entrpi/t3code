@@ -666,6 +666,78 @@ export function normalizeTerminalOutput(
   return { text: state.text, truncated: state.truncated };
 }
 
+const SETTLED_HEAD_LINES = 200;
+const SETTLED_HEAD_MAX_CHARS = 16 * 1024;
+/** Codex caps output itself and leaves this line where it cut; lines past it are uncounted. */
+const PROVIDER_OMISSION_LINE = /^\.\.\. \d+ bytes omitted \.\.\.$/m;
+
+/** Lines in `text`; a final line without a newline counts. */
+function lineCount(text: string): number {
+  let count = 0;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+    count += 1;
+  }
+  return text.length > 0 && !text.endsWith("\n") ? count + 1 : count;
+}
+
+/** `text` through its `lines`th newline within `maxChars`. */
+function leadingLines(text: string, lines: number, maxChars: number): string {
+  let end = 0;
+  for (let line = 0; line < lines; line += 1) {
+    const newline = text.indexOf("\n", end);
+    if (newline === -1 || newline >= maxChars) break;
+    end = newline + 1;
+  }
+  return text.slice(0, end);
+}
+
+/**
+ * A finished command's output within `maxChars`: all of it when it fits, otherwise its first
+ * lines as `head`, then its tail. `omittedLines` counts the raw lines between them, so it is
+ * approximate when the output redraws lines, and absent when the provider already cut some.
+ */
+export function settledTerminalOutput(
+  output: string,
+  maxChars: number = TERMINAL_OUTPUT_TAIL_CHARS,
+): {
+  readonly text: string;
+  readonly truncated: boolean;
+  readonly head?: string;
+  readonly omittedLines?: number;
+} {
+  const sourceChars = maxChars * 4;
+  let source = output;
+  if (output.length > sourceChars) {
+    // Cut at a newline to avoid splitting escape sequences.
+    source = output.slice(output.length - sourceChars);
+    const newline = source.indexOf("\n");
+    if (newline !== -1 && newline + 1 < source.length) source = source.slice(newline + 1);
+  }
+  const tail = normalizeTerminalOutput(source, maxChars);
+  const truncated = tail.truncated || source.length !== output.length;
+  if (!truncated) return tail;
+
+  // Only lines that scrolled out of the live window are final.
+  const headSource = leadingLines(output, SETTLED_HEAD_LINES + LIVE_LINES, sourceChars);
+  const headLines = normalizeTerminalOutput(headSource, headSource.length).text.split("\n");
+  const settledLines = Math.min(SETTLED_HEAD_LINES, headLines.length - LIVE_LINES);
+  let head = "";
+  for (let index = 0; index < settledLines; index += 1) {
+    const line = `${headLines[index]!}\n`;
+    if (head.length + line.length > SETTLED_HEAD_MAX_CHARS) break;
+    head += line;
+  }
+  if (head.length === 0) return { text: tail.text, truncated };
+  const kept = terminalOutputTail(tail.text, maxChars - head.length).text;
+  const omittedLines = lineCount(output) - lineCount(head) - lineCount(kept);
+  if (omittedLines <= 0) return { text: tail.text, truncated };
+  const providerCut = PROVIDER_OMISSION_LINE.exec(output)?.[0];
+  if (providerCut !== undefined && !head.includes(providerCut) && !kept.includes(providerCut)) {
+    return { text: kept, truncated, head: head.slice(0, -1) };
+  }
+  return { text: kept, truncated, head: head.slice(0, -1), omittedLines };
+}
+
 export interface TerminalSpan {
   readonly text: string;
   readonly style: TerminalSpanStyle | null;

@@ -275,7 +275,9 @@ layer("CommandOutputHub", (it) => {
         assert.equal(final.kind, "replace");
         assert.isFalse(final.running);
         assert.isTrue(final.truncated);
-        assert.isAtMost(final.text.length, TERMINAL_OUTPUT_TAIL_CHARS);
+        assert.isTrue(final.head?.startsWith("line 0\nline 1\n"));
+        assert.isAbove(final.omittedLines ?? 0, 0);
+        assert.isAtMost((final.head?.length ?? 0) + final.text.length, TERMINAL_OUTPUT_TAIL_CHARS);
         assert.isTrue(final.text.endsWith("line 399999"));
         assert.equal(yield* Queue.take(frames), "ended");
       }),

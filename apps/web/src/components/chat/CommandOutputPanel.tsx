@@ -1,6 +1,13 @@
-import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
+import {
+  type CommandOutputView,
+  omittedLinesLabel,
+} from "@t3tools/client-runtime/state/command-output";
 import type { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
-import { TERMINAL_PALETTES, terminalOutputSpans } from "@t3tools/shared/terminalOutput";
+import {
+  TERMINAL_PALETTES,
+  type TerminalSpan,
+  terminalOutputSpans,
+} from "@t3tools/shared/terminalOutput";
 import { useLayoutEffect, useRef } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
@@ -10,6 +17,20 @@ import { useEnvironmentQuery } from "../../state/query";
 import type { TurnItemSource } from "./timelineRowContext";
 
 const FOLLOW_SLACK_PX = 8;
+
+function OutputSpans(props: { readonly spans: ReadonlyArray<TerminalSpan> }) {
+  return props.spans.map((span, index) =>
+    span.style === null ? (
+      span.text
+    ) : (
+      // Spans never reorder and are rebuilt on each update.
+      // oxlint-disable-next-line react/no-array-index-key
+      <span key={index} style={span.style}>
+        {span.text}
+      </span>
+    ),
+  );
+}
 
 export function useCommandOutputStreaming(environmentId: EnvironmentId): boolean {
   return (
@@ -52,10 +73,11 @@ export function CommandOutputPanel(props: {
     return data.running ? null : <div className="text-muted-foreground italic">No output.</div>;
   }
   // Parse after all hooks to preserve the text/theme compiler cache.
-  const spans = terminalOutputSpans(text, TERMINAL_PALETTES[resolvedTheme]);
+  const palette = TERMINAL_PALETTES[resolvedTheme];
+  const head = data?.head;
   return (
     <div>
-      {data?.output.truncated ? (
+      {data?.output.truncated && !head ? (
         <div className="text-muted-foreground italic">Earlier output not shown</div>
       ) : null}
       <div
@@ -67,17 +89,13 @@ export function CommandOutputPanel(props: {
         }}
         className="max-h-80 overflow-auto text-muted-foreground"
       >
-        {spans.map((span, index) =>
-          span.style === null ? (
-            span.text
-          ) : (
-            // Spans never reorder and are rebuilt on each update.
-            // oxlint-disable-next-line react/no-array-index-key
-            <span key={index} style={span.style}>
-              {span.text}
-            </span>
-          ),
-        )}
+        {head ? (
+          <>
+            <OutputSpans spans={terminalOutputSpans(head.text, palette)} />
+            <div className="italic">{omittedLinesLabel(head.omittedLines)}</div>
+          </>
+        ) : null}
+        <OutputSpans spans={terminalOutputSpans(text, palette)} />
       </div>
     </div>
   );

@@ -3610,6 +3610,10 @@ export const OrchestrationV2CommandOutputFrame = Schema.Struct({
   /** Earlier output was dropped to keep the tail bounded. */
   truncated: Schema.Boolean,
   running: Schema.Boolean,
+  /** The output's first settled lines, shown above the tail when output between was dropped. */
+  head: Schema.optional(Schema.String),
+  /** Lines dropped between `head` and the tail, when known. */
+  omittedLines: Schema.optional(NonNegativeInt),
 });
 export type OrchestrationV2CommandOutputFrame = typeof OrchestrationV2CommandOutputFrame.Type;
 

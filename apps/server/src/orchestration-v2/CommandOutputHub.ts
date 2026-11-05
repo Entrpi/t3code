@@ -8,9 +8,8 @@ import {
 import {
   appendTerminalOutput,
   EMPTY_TERMINAL_OUTPUT,
-  normalizeTerminalOutput,
+  settledTerminalOutput,
   type TerminalOutputState,
-  TERMINAL_OUTPUT_TAIL_CHARS,
   terminalOutputResumeText,
 } from "@t3tools/shared/terminalOutput";
 import * as Cause from "effect/Cause";
@@ -38,7 +37,6 @@ const COMMAND_OUTPUT_MAX_APPEND_CHARS = 16 * 1024;
 const MAX_LIVE_COMMANDS = 64;
 /** Retain finished tails for settlements that omit output. */
 const MAX_FINISHED_COMMANDS = 16;
-const MAX_FINAL_SOURCE_CHARS = TERMINAL_OUTPUT_TAIL_CHARS * 4;
 
 interface Subscriber {
   pendingAppend: string;
@@ -84,23 +82,8 @@ function legacyClaudeBashOutput(output: string): string {
   return out.length > 0 && err.length > 0 && !out.endsWith("\n") ? `${out}\n${err}` : out + err;
 }
 
-function persistedCommandOutput(output: string | undefined): {
-  readonly text: string;
-  readonly truncated: boolean;
-} {
-  if (output === undefined) return { text: "", truncated: false };
-  let source = output;
-  if (output.length > MAX_FINAL_SOURCE_CHARS) {
-    // Cut at a newline to avoid splitting escape sequences.
-    source = output.slice(output.length - MAX_FINAL_SOURCE_CHARS);
-    const newline = source.indexOf("\n");
-    if (newline !== -1 && newline + 1 < source.length) source = source.slice(newline + 1);
-  }
-  const normalized = normalizeTerminalOutput(source);
-  return {
-    text: normalized.text,
-    truncated: normalized.truncated || source.length !== output.length,
-  };
+function persistedCommandOutput(output: string | undefined) {
+  return output === undefined ? { text: "", truncated: false } : settledTerminalOutput(output);
 }
 
 function setBounded<V>(

@@ -10,6 +10,8 @@ export interface CommandOutputView {
   readonly output: TerminalOutputState;
   /** False once the command settled and `output` is final. */
   readonly running: boolean;
+  /** The output's first lines, when output between them and `output` was dropped. */
+  readonly head?: { readonly text: string; readonly omittedLines: number | undefined };
 }
 
 export const EMPTY_COMMAND_OUTPUT: CommandOutputView = {
@@ -19,19 +21,28 @@ export const EMPTY_COMMAND_OUTPUT: CommandOutputView = {
 
 /**
  * Applies one server frame. A `replace` carries the whole bounded tail (the
- * first frame, a viewer that fell behind, or the final output); an `append`
- * is raw terminal text normalized with the same rules the server uses.
+ * first frame, a viewer that fell behind, or the final output) and long
+ * output's first lines; an `append` is raw terminal text normalized with the
+ * same rules the server uses.
  */
 export function applyCommandOutputFrame(
   view: CommandOutputView,
   frame: OrchestrationV2CommandOutputFrame,
 ): CommandOutputView {
   const base = frame.kind === "replace" ? EMPTY_TERMINAL_OUTPUT : view.output;
-  return {
-    output: appendTerminalOutput(
-      { ...base, truncated: base.truncated || frame.truncated },
-      frame.text,
-    ),
-    running: frame.running,
-  };
+  const output = appendTerminalOutput(
+    { ...base, truncated: base.truncated || frame.truncated },
+    frame.text,
+  );
+  const head =
+    frame.kind === "append"
+      ? view.head
+      : frame.head && { text: frame.head, omittedLines: frame.omittedLines };
+  return { output, running: frame.running, ...(head && { head }) };
+}
+
+/** The marker between long output's first lines and its tail. */
+export function omittedLinesLabel(count: number | undefined): string {
+  if (count === undefined) return "… output omitted …";
+  return `… ${count.toLocaleString()} line${count === 1 ? "" : "s"} omitted …`;
 }

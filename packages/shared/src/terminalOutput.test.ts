@@ -4,6 +4,8 @@ import {
   appendTerminalOutput,
   EMPTY_TERMINAL_OUTPUT,
   normalizeTerminalOutput,
+  settledTerminalOutput,
+  TERMINAL_OUTPUT_TAIL_CHARS,
   TERMINAL_PALETTES,
   terminalOutputPlainText,
   terminalOutputResumeText,
@@ -188,6 +190,52 @@ describe("terminalOutputTail", () => {
     const text = `${"a".repeat(10)}😀${"b".repeat(4)}`;
     const tail = terminalOutputTail(text, 5);
     expect(tail.text).toBe("bbbb");
+  });
+});
+
+describe("settledTerminalOutput", () => {
+  const lines = (count: number, line = (index: number) => `line ${index}`) =>
+    Array.from({ length: count }, (_, index) => line(index)).join("\n");
+
+  it("shows output that fits in full", () => {
+    const settled = settledTerminalOutput(lines(405));
+    expect(settled).toEqual({ text: lines(405), truncated: false });
+  });
+
+  it("keeps the first 200 lines and the tail, and counts the lines between", () => {
+    const settled = settledTerminalOutput(lines(100_000));
+    expect(settled.head).toBe(lines(200));
+    expect(settled.text.endsWith("line 99999")).toBe(true);
+    const firstTailLine = Number(/^line (\d+)/.exec(settled.text)![1]);
+    expect(settled.omittedLines).toBe(firstTailLine - 200);
+    expect(settled.truncated).toBe(true);
+    expect(settled.head!.length + settled.text.length).toBeLessThanOrEqual(
+      TERMINAL_OUTPUT_TAIL_CHARS,
+    );
+  });
+
+  it("gives no count when the provider already cut lines from the middle", () => {
+    const output = `${lines(30_000)}\n... 1040319 bytes omitted ...\n${lines(30_000)}`;
+    const settled = settledTerminalOutput(output);
+    expect(settled.head).toBe(lines(200));
+    expect(settled.omittedLines).toBeUndefined();
+  });
+
+  it("caps the head by characters, in whole lines, when lines are long", () => {
+    const settled = settledTerminalOutput(lines(2_000, (index) => `${index} ${"x".repeat(999)}`));
+    const head = settled.head!.split("\n");
+    expect(head.length).toBeGreaterThan(0);
+    expect(head.length).toBeLessThan(200);
+    expect(head.every((line, index) => line === `${index} ${"x".repeat(999)}`)).toBe(true);
+    expect(settled.head!.length + settled.text.length).toBeLessThanOrEqual(
+      TERMINAL_OUTPUT_TAIL_CHARS,
+    );
+  });
+
+  it("keeps only the tail of output that is one huge line", () => {
+    const settled = settledTerminalOutput("x".repeat(TERMINAL_OUTPUT_TAIL_CHARS * 8));
+    expect(settled.head).toBeUndefined();
+    expect(settled.truncated).toBe(true);
   });
 });
 
