@@ -790,6 +790,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   // Touch shows actions all the time, and narrow lanes have no room beside the
   // bubble, so both keep the actions on their own line.
   const floatActions = row.groupedWithNext === true && !coarsePointer;
+  const steeredIntent =
+    (row.message.inputIntent === "steer" ||
+      row.message.inputIntent === "promoted_queued_to_steer") &&
+    !row.continuedBySteer
+      ? row.message.inputIntent
+      : null;
   const bubbleSurface = editingInline || (!mediaOnly && !fileCardsOnly && !audioOnly);
   const messageActions = (
     <div
@@ -859,11 +865,6 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         <div aria-hidden>
           <GuestMessageName name={userMessage.guestName} />
         </div>
-      ) : null}
-      {(row.message.inputIntent === "steer" ||
-        row.message.inputIntent === "promoted_queued_to_steer") &&
-      !row.continuesSteer ? (
-        <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       {mediaAboveText ? (
         <div className="flex max-w-[80%] justify-end">
@@ -1071,12 +1072,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       {!editingInline && (!folded || expanded) ? (
         <div
           className={cn(
-            "flex w-full max-w-[80%] justify-end pe-1",
-            floatActions && "@min-[37rem]:hidden",
-            ACTIONS_REVEAL_CLASS_NAME,
+            "flex w-full max-w-[80%] items-center justify-end gap-2 pe-1",
+            floatActions && steeredIntent === null && "@min-[37rem]:hidden",
           )}
         >
-          {messageActions}
+          <div
+            className={cn("flex", floatActions && "@min-[37rem]:hidden", ACTIONS_REVEAL_CLASS_NAME)}
+          >
+            {messageActions}
+          </div>
+          {steeredIntent === null ? null : <UserMessageIntentMarker intent={steeredIntent} />}
         </div>
       ) : null}
     </div>
@@ -1096,13 +1101,13 @@ function UserMessageIntentMarker({
       <TooltipTrigger
         render={
           <div
-            className="me-1 flex items-center justify-end gap-1 text-xs leading-none text-muted-foreground"
+            className="flex shrink-0 items-center gap-1 text-xs leading-none text-muted-foreground"
             data-user-message-intent={intent}
           />
         }
       >
         <Redo2Icon aria-hidden="true" className="size-3" />
-        Steer
+        Steered
       </TooltipTrigger>
       <TooltipPopup side="top">
         {intent === "promoted_queued_to_steer"
