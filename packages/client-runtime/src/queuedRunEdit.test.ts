@@ -76,6 +76,51 @@ describe("makeQueuedRunEditStore", () => {
     expect(exits).toHaveLength(1);
   });
 
+  it.each([
+    ["is cancelled", "end"],
+    ["is saved", "save"],
+    ["loses its run", "left"],
+  ] as const)("holds the queue while the edit is open and resumes it when it %s", (_, exit) => {
+    const { registry, runs, store } = setup();
+    const calls: string[] = [];
+    const queue = {
+      held: false,
+      hold: () => calls.push("hold"),
+      resume: () => calls.push("resume"),
+    };
+    store.begin(
+      "env:thread",
+      { runId: RUN, text: "draft" },
+      { runs, onRunLeftQueue: () => {}, queue },
+    );
+    store.begin(
+      "env:thread",
+      { runId: RUN, text: "again" },
+      { runs, onRunLeftQueue: () => {}, queue },
+    );
+    expect(calls).toEqual(["hold"]);
+    if (exit === "end") store.end("env:thread");
+    if (exit === "save") store.startSave("env:thread")?.(true);
+    if (exit === "left") registry.set(runs, []);
+    expect(calls).toEqual(["hold", "resume"]);
+  });
+
+  it("leaves a queue that was already held as it found it", () => {
+    const { store } = setup();
+    const calls: string[] = [];
+    store.begin(
+      "env:thread",
+      { runId: RUN, text: "draft" },
+      {
+        runs: Atom.make<ReadonlyArray<QueuedRunStatus> | null>(queued()),
+        onRunLeftQueue: () => {},
+        queue: { held: true, hold: () => calls.push("hold"), resume: () => calls.push("resume") },
+      },
+    );
+    store.end("env:thread");
+    expect(calls).toEqual([]);
+  });
+
   it("stops watching when the edit ends", () => {
     const { registry, runs, store, exits, begin } = setup();
     begin();

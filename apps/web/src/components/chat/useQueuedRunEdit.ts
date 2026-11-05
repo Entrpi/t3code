@@ -3,6 +3,7 @@ import {
   makeQueuedRunEditStore,
   makeQueuedRunsAtom,
 } from "@t3tools/client-runtime/queued-run-edit";
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -256,6 +257,22 @@ export function useQueuedRunEdit(input: {
               get(environmentThreadDetails.quietThreadAtom(threadRef))?.projection.runs ?? null,
           ),
         }),
+        queue: {
+          held:
+            serverProjection?.runs.some(
+              (run) => run.status === "queued" && run.queueHeld === true,
+            ) ?? false,
+          hold: () =>
+            void runAtomCommand(appAtomRegistry, threadEnvironment.holdThreadQueue, {
+              environmentId,
+              input: { threadId: activeThreadId },
+            }),
+          resume: () =>
+            void runAtomCommand(appAtomRegistry, threadEnvironment.resumeThreadQueue, {
+              environmentId,
+              input: { threadId: activeThreadId },
+            }),
+        },
         // The run started or was cancelled from another client. A changed
         // edit moves into the thread's own draft when that draft is empty;
         // otherwise it is dropped. Edits outlive navigation, so the toast is

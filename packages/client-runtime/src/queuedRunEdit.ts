@@ -79,6 +79,13 @@ interface ExitWatch<E> {
   cancel: (() => void) | null;
 }
 
+/** The thread's queue, so an edit can hold it and the message never starts with its old text. */
+export interface QueuedRunEditQueue {
+  readonly held: boolean;
+  readonly hold: () => void;
+  readonly resume: () => void;
+}
+
 /**
  * Settles a save from `startSave`. False, changing nothing, when the edit was
  * ended or begun again meanwhile. Success ends the edit; failure resumes its
@@ -101,6 +108,13 @@ export function makeQueuedRunEditStore<E extends { readonly runId: RunId }>(opti
   );
   // Each begin creates a new watch, so the watch is the edit's identity.
   const watches = new Map<string, ExitWatch<E>>();
+  // Resumes for queues an edit held; a queue held before the edit began stays held.
+  const queueReleases = new Map<string, () => void>();
+  const releaseQueue = (threadKey: string) => {
+    const resume = queueReleases.get(threadKey);
+    queueReleases.delete(threadKey);
+    resume?.();
+  };
 
   const setSaving = (threadKey: string, saving: boolean) => {
     const current = registry.get(savingAtom);
@@ -140,6 +154,7 @@ export function makeQueuedRunEditStore<E extends { readonly runId: RunId }>(opti
       const edit = get(threadKey);
       if (edit === null || edit.runId !== watch.runId) return;
       write(threadKey, null);
+      releaseQueue(threadKey);
       watch.onRunLeftQueue(threadKey, edit);
     };
     watch.cancel = registry.subscribe(watch.runs, check);
@@ -169,10 +184,15 @@ export function makeQueuedRunEditStore<E extends { readonly runId: RunId }>(opti
       watch: {
         readonly runs: QueuedRunsAtom;
         readonly onRunLeftQueue: (threadKey: string, edit: E) => void;
+        readonly queue?: QueuedRunEditQueue;
       },
     ) {
       stopWatch(threadKey);
       write(threadKey, edit);
+      if (watch.queue !== undefined && !watch.queue.held && !queueReleases.has(threadKey)) {
+        watch.queue.hold();
+        queueReleases.set(threadKey, watch.queue.resume);
+      }
       const next: ExitWatch<E> = { ...watch, runId: edit.runId, cancel: null };
       watches.set(threadKey, next);
       subscribe(threadKey, next);
@@ -184,6 +204,7 @@ export function makeQueuedRunEditStore<E extends { readonly runId: RunId }>(opti
     end(threadKey: string) {
       stopWatch(threadKey);
       write(threadKey, null);
+      releaseQueue(threadKey);
     },
     /**
      * Claims the open edit for a save, or returns null when there is no edit
@@ -206,6 +227,7 @@ export function makeQueuedRunEditStore<E extends { readonly runId: RunId }>(opti
         if (succeeded) {
           stopWatch(threadKey);
           write(threadKey, null);
+          releaseQueue(threadKey);
           return true;
         }
         subscribe(threadKey, watch);
