@@ -10,8 +10,10 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 export const ORCHESTRATION_CACHE_SCHEMA_VERSION = 3 as const;
-// Older caches may contain human turns that bypassed server history budgets.
-export const ORCHESTRATION_THREAD_CACHE_SCHEMA_VERSION = 5 as const;
+// Older caches may contain human turns that bypassed server history budgets, or omit the
+// prompt count before a partial window, which replay cannot restore. Skips 6, which was the
+// compact format's version: excess fields decode, so a compact record would pass as full.
+export const ORCHESTRATION_THREAD_CACHE_SCHEMA_VERSION = 7 as const;
 
 export const StoredOrchestrationShellSnapshot = Schema.Struct({
   schemaVersion: Schema.Literal(ORCHESTRATION_CACHE_SCHEMA_VERSION),

@@ -8,6 +8,7 @@ export type ThreadSnapshotHistoryMeta = {
   readonly historyCursor: string | null;
   readonly hasMoreHistory: boolean;
   readonly latestLocalTurnOrdinal?: number | null;
+  readonly userTurnsBeforeWindow?: number;
 };
 
 export type ThreadSnapshotLoadResult =

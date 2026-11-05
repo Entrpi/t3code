@@ -92,6 +92,7 @@ import {
   threadSupportsProviderHandoff,
 } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
+import { userTurnNumbers } from "@t3tools/client-runtime/state/thread-history-merge";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import {
   codexFeedbackMessage,
@@ -1597,6 +1598,10 @@ export default function ChatView(props: ChatViewProps) {
   );
   const turnDiffSummaries = useThreadCheckpointSummaries(routeThreadDetailRef);
   const availableRevertTurnCounts = deriveAvailableRevertTurnCounts(serverProjection);
+  const turnNumberByMessageId = userTurnNumbers(
+    serverProjection?.visibleTurnItems ?? [],
+    serverThreadHistory.userTurnsBeforeWindow,
+  );
   // A paged history window cannot identify the first loaded run as the thread start.
   const threadStartCheckpointReady =
     !serverThreadHistory.hasMoreHistory &&
@@ -3474,6 +3479,7 @@ export default function ChatView(props: ChatViewProps) {
                   supportsConversationRollback={supportsConversationRollback}
                   threadStartCheckpointReady={threadStartCheckpointReady}
                   availableRevertTurnCounts={availableRevertTurnCounts}
+                  turnNumberByMessageId={turnNumberByMessageId}
                   onRevertToTurnCount={onRevertTimelineTurnStable}
                   onUseArtifactTemplate={insertArtifactTemplateStable}
                   onSendAppMessage={sendAppMessageStable}

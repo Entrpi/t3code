@@ -3,7 +3,13 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
 import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
-import { mergeOlderHistoryIntoProjection } from "./threadHistoryMerge.ts";
+import {
+  applyHistoryPageMeta,
+  countUserTurnStarts,
+  EMPTY_THREAD_HISTORY_META,
+  mergeOlderHistoryIntoProjection,
+  userTurnNumbers,
+} from "./threadHistoryMerge.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { derivePendingThreadRequests } from "./threadRequests.ts";
 
@@ -129,6 +135,49 @@ describe("threadHistoryMerge", () => {
       "item-3",
       "item-0",
       "item-1",
+    ]);
+  });
+
+  it("numbers prompts after the window's earlier turns, also once older pages load", () => {
+    const prompt = (index: number, overrides: Record<string, unknown> = {}) =>
+      ({
+        ...row(index),
+        item: {
+          ...row(index).item,
+          type: "user_message",
+          createdBy: "user",
+          creationSource: "web",
+          inputIntent: "turn_start",
+          messageId: `message-${index}`,
+          text: `Prompt ${index}`,
+          attachments: [],
+          ...overrides,
+        },
+      }) as unknown as OrchestrationV2ProjectedTurnItem;
+    const window = [
+      prompt(4),
+      row(5),
+      prompt(6),
+      prompt(7, { createdBy: "agent" }),
+      prompt(8, { inputIntent: "queued_turn", status: "pending" }),
+    ];
+    expect([...userTurnNumbers(window, 3)]).toEqual([
+      ["message-4", 4],
+      ["message-6", 5],
+    ]);
+    expect(userTurnNumbers(window, null).size).toBe(0);
+
+    const projection = { ...v2Projection, visibleTurnItems: window };
+    const merged = mergeOlderHistoryIntoProjection(projection, [prompt(2), row(3), prompt(4)]);
+    const history = applyHistoryPageMeta(
+      { ...EMPTY_THREAD_HISTORY_META, userTurnsBeforeWindow: 3 },
+      { nextCursor: null, hasMoreHistory: false },
+      countUserTurnStarts(merged.visibleTurnItems) - countUserTurnStarts(window),
+    );
+    expect([...userTurnNumbers(merged.visibleTurnItems, history.userTurnsBeforeWindow)]).toEqual([
+      ["message-2", 3],
+      ["message-4", 4],
+      ["message-6", 5],
     ]);
   });
 

@@ -595,6 +595,7 @@ type MessagesTimelineRowContent =
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
+      turnNumber?: number | undefined;
       /** Another of your messages follows directly, so the two sit closer together. */
       groupedWithNext?: boolean;
       /** Another of your messages sits directly above, so the joined corners tighten. */
@@ -1406,6 +1407,7 @@ export function deriveMessagesTimelineRows(input: {
   supportsConversationRollback: boolean;
   threadStartCheckpointReady?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
+  turnNumberByMessageId?: ReadonlyMap<MessageId, number> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
   const timelineEntries = timelineRowEntries(input.timelineEntries);
@@ -2051,6 +2053,10 @@ export function deriveMessagesTimelineRows(input: {
         timelineEntry.message.role === "user"
           ? revertTurnCountByUserMessageId.get(timelineEntry.message.id)
           : undefined,
+      turnNumber:
+        timelineEntry.message.role === "user"
+          ? input.turnNumberByMessageId?.get(timelineEntry.message.id)
+          : undefined,
     });
   }
 
@@ -2508,6 +2514,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount &&
+        a.turnNumber === bm.turnNumber &&
         a.groupedWithNext === bm.groupedWithNext &&
         a.groupedWithPrevious === bm.groupedWithPrevious &&
         a.continuesSteer === bm.continuesSteer

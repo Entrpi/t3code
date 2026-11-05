@@ -1,8 +1,17 @@
 import type {
+  MessageId,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
-import { isOrchestrationV2TurnItemVisible } from "@t3tools/shared/orchestrationV2Timeline";
+import {
+  isOrchestrationV2TurnItemVisible,
+  isOrchestrationV2UserTurnStart,
+} from "@t3tools/shared/orchestrationV2Timeline";
+
+import type { ThreadStructureTurnItem } from "./models.ts";
+
+/** Wire rows and thread-structure rows both carry prompts unchanged. */
+type TurnRow = { readonly item: ThreadStructureTurnItem };
 
 export type ThreadHistoryMeta = {
   readonly historyCursor: string | null;
@@ -11,6 +20,8 @@ export type ThreadHistoryMeta = {
   readonly error: string | null;
   readonly expanded: boolean;
   readonly latestLocalTurnOrdinal: number | null;
+  /** Prompts before the window's first prompt; null while unknown (an older server's partial window). */
+  readonly userTurnsBeforeWindow: number | null;
 };
 
 export const EMPTY_THREAD_HISTORY_META: ThreadHistoryMeta = {
@@ -20,6 +31,7 @@ export const EMPTY_THREAD_HISTORY_META: ThreadHistoryMeta = {
   error: null,
   expanded: false,
   latestLocalTurnOrdinal: null,
+  userTurnsBeforeWindow: 0,
 };
 
 export function isActiveHistoryRequestCursor(
@@ -172,6 +184,7 @@ export function applyHistoryPageMeta(
     readonly nextCursor: string | null;
     readonly hasMoreHistory: boolean;
   },
+  addedUserTurns: number,
 ): ThreadHistoryMeta {
   return {
     historyCursor: page.nextCursor,
@@ -180,7 +193,44 @@ export function applyHistoryPageMeta(
     error: null,
     expanded: true,
     latestLocalTurnOrdinal: current.latestLocalTurnOrdinal,
+    userTurnsBeforeWindow: withOlderUserTurns(current.userTurnsBeforeWindow, addedUserTurns),
   };
+}
+
+/** The count once `added` earlier prompts joined the window. */
+export function withOlderUserTurns(before: number | null, added: number): number | null {
+  return before === null ? null : Math.max(0, before - added);
+}
+
+export function countUserTurnStarts(rows: ReadonlyArray<TurnRow>): number {
+  let count = 0;
+  for (const row of rows) if (isOrchestrationV2UserTurnStart(row.item)) count += 1;
+  return count;
+}
+
+const NO_TURN_NUMBERS: ReadonlyMap<MessageId, number> = new Map();
+const turnNumbersCache = new WeakMap<
+  ReadonlyArray<TurnRow>,
+  { readonly before: number; readonly numbers: ReadonlyMap<MessageId, number> }
+>();
+
+/** Each shown prompt's "Turn N", counting on from the `before` prompts that precede the rows. */
+export function userTurnNumbers(
+  rows: ReadonlyArray<TurnRow>,
+  before: number | null,
+): ReadonlyMap<MessageId, number> {
+  if (before === null) return NO_TURN_NUMBERS;
+  const cached = turnNumbersCache.get(rows);
+  if (cached?.before === before) return cached.numbers;
+  const numbers = new Map<MessageId, number>();
+  let turn = before;
+  for (const { item } of rows) {
+    if (item.type !== "user_message" || !isOrchestrationV2UserTurnStart(item)) continue;
+    turn += 1;
+    numbers.set(item.messageId, turn);
+  }
+  turnNumbersCache.set(rows, { before, numbers });
+  return numbers;
 }
 
 export function shouldShowLoadEarlierControl(history: ThreadHistoryMeta): boolean {

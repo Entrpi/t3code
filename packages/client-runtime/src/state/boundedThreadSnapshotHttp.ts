@@ -94,6 +94,9 @@ export const layer: Layer.Layer<
               historyCursor: bounded.historyCursor,
               hasMoreHistory: bounded.hasMoreHistory,
               latestLocalTurnOrdinal: bounded.latestLocalTurnOrdinal,
+              ...(bounded.userTurnsBeforeWindow === undefined
+                ? {}
+                : { userTurnsBeforeWindow: bounded.userTurnsBeforeWindow }),
             },
           })),
           Effect.provideService(HttpClient.HttpClient, httpClient),

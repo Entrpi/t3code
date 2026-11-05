@@ -108,6 +108,7 @@ describe("citedThreadSnapshot", () => {
     error: null,
     expanded: false,
     latestLocalTurnOrdinal: null,
+    userTurnsBeforeWindow: 0,
   };
   const unloaded = {
     thread: null,

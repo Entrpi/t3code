@@ -35,3 +35,23 @@ export function formatDuration(durationMs: number): string {
   if (seconds > 0) parts.push(`${seconds}s`);
   return parts.join(" ");
 }
+
+const TIME_AGO_UNITS = [
+  ["year", 365 * 24 * 3_600_000],
+  ["month", 30 * 24 * 3_600_000],
+  ["day", 24 * 3_600_000],
+  ["hour", 3_600_000],
+  ["minute", 60_000],
+] as const;
+
+/** "5 minutes ago", "3 months ago". Hermes has no Intl.RelativeTimeFormat. */
+export function formatTimeAgo(isoDate: string, nowMs: number): string {
+  const timestamp = Date.parse(isoDate);
+  if (!Number.isFinite(timestamp)) return "";
+  const elapsedMs = nowMs - timestamp;
+  for (const [unit, unitMs] of TIME_AGO_UNITS) {
+    const count = Math.floor(elapsedMs / unitMs);
+    if (count >= 1) return `${count} ${unit}${count === 1 ? "" : "s"} ago`;
+  }
+  return "just now";
+}

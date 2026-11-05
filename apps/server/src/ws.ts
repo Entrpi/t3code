@@ -938,6 +938,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
               deferWork: input.acceptDeferredWork === true,
               userTurnLimit: THREAD_HISTORY_PAGE_POLICY.maxUserTurns,
+              userTurnKeys: true,
             })
           : threadManagement.getThreadSnapshot(input.threadId)
       ).pipe(

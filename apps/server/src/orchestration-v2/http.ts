@@ -142,6 +142,7 @@ export const layer = HttpApiBuilder.group(
                 : OLDER_THREAD_USER_TURN_LIMIT,
             ...(anchorItemId === undefined ? {} : { anchorItemId }),
             ...(anchorThreadId === undefined ? {} : { anchorThreadId }),
+            userTurnKeys: anchorItemId === undefined,
           })
           .pipe(
             Effect.map((snapshot) => ({
@@ -231,6 +232,7 @@ export const layer = HttpApiBuilder.group(
           const bounded = buildBoundedThreadProjection({
             projection: snapshot.projection,
             snapshotSequence: snapshot.snapshotSequence,
+            userTurnKeys: snapshot.userTurnKeys,
           });
           return {
             snapshotSequence: snapshot.snapshotSequence,

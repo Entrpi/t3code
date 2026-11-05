@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2Actor,
   OrchestrationV2Run,
   OrchestrationV2RunAttempt,
   OrchestrationV2TurnItem,
@@ -114,4 +115,22 @@ export function createOrchestrationV2TurnItemVisibility(input: {
       !interruptRuns.has(item.runId)
     );
   };
+}
+
+/**
+ * A prompt that started a turn, which clients show and number ("Turn N"). Apply it to
+ * visible rows; a queued prompt counts once it leaves the queue.
+ */
+export function isOrchestrationV2UserTurnStart(
+  item: Pick<OrchestrationV2TurnItem, "type" | "status"> & {
+    readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
+    readonly createdBy?: OrchestrationV2Actor;
+  },
+): boolean {
+  return (
+    item.type === "user_message" &&
+    item.createdBy === "user" &&
+    (item.inputIntent === "turn_start" ||
+      (item.inputIntent === "queued_turn" && item.status !== "pending"))
+  );
 }

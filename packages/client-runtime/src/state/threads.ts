@@ -41,11 +41,13 @@ import * as ThreadHistoryController from "./threadHistoryController.ts";
 import { fetchEnvironmentThreadHistoryPage } from "./threadHistoryHttp.ts";
 import {
   applyHistoryPageMeta,
+  countUserTurnStarts,
   clearActiveHistoryLoading,
   EMPTY_THREAD_HISTORY_META,
   isActiveHistoryRequestCursor,
   mergeOlderHistoryIntoProjection,
   type ThreadHistoryMeta,
+  withOlderUserTurns,
 } from "./threadHistoryMerge.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
 import { makeThreadRequestsResolvedAnnouncer, pendingRuntimeRequestIds } from "./threadRequests.ts";
@@ -75,6 +77,18 @@ function formatHistoryError(error: unknown): string {
   return "Could not load earlier activity.";
 }
 
+/** An older server's partial window leaves the count unknown; a complete timeline starts at zero. */
+function userTurnsBeforeWindowOf(snapshot: {
+  readonly historyCursor?: string | null;
+  readonly hasMoreHistory?: boolean;
+  readonly userTurnsBeforeWindow?: number;
+}): number | null {
+  return (
+    snapshot.userTurnsBeforeWindow ??
+    (snapshot.hasMoreHistory === true || (snapshot.historyCursor ?? null) !== null ? null : 0)
+  );
+}
+
 function historyMetaFromCachedSnapshot(
   snapshot: OrchestrationV2ThreadDetailSnapshot,
 ): ThreadHistoryMeta {
@@ -87,6 +101,7 @@ function historyMetaFromCachedSnapshot(
     error: null,
     expanded: false,
     latestLocalTurnOrdinal: snapshot.latestLocalTurnOrdinal ?? null,
+    userTurnsBeforeWindow: userTurnsBeforeWindowOf(snapshot),
   };
 }
 
@@ -105,6 +120,9 @@ function snapshotToPersist(
       historyCursor: history.historyCursor,
       hasMoreHistory: history.hasMoreHistory,
       latestLocalTurnOrdinal: history.latestLocalTurnOrdinal,
+      ...(history.userTurnsBeforeWindow === null
+        ? {}
+        : { userTurnsBeforeWindow: history.userTurnsBeforeWindow }),
     };
   }
   return { snapshotSequence, projection };
@@ -652,6 +670,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 error: null,
                 expanded: false,
                 latestLocalTurnOrdinal: item.latestLocalTurnOrdinal ?? null,
+                userTurnsBeforeWindow: userTurnsBeforeWindowOf(item),
               },
             }
           : { resetHistory: true },
@@ -799,27 +818,39 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 if (!isCurrent(latest)) return [staleResult(latest), latest];
                 if (Option.isNone(latest.data) || latest.status === "deleted")
                   return [{ _tag: "noop" }, { ...latest, history: EMPTY_THREAD_HISTORY_META }];
+                const merged = mergeOlderHistoryIntoProjection(
+                  latest.data.value,
+                  page.items,
+                  workAnchorId === undefined
+                    ? undefined
+                    : { anchorId: workAnchorId, nextCursor: page.nextCursor },
+                );
+                const addedUserTurns =
+                  countUserTurnStarts(merged.visibleTurnItems) -
+                  countUserTurnStarts(latest.data.value.visibleTurnItems);
                 return [
                   { _tag: "loaded" },
                   {
                     ...latest,
-                    data: Option.some(
-                      mergeOlderHistoryIntoProjection(
-                        latest.data.value,
-                        page.items,
-                        workAnchorId === undefined
-                          ? undefined
-                          : { anchorId: workAnchorId, nextCursor: page.nextCursor },
-                      ),
-                    ),
+                    data: Option.some(merged),
                     status:
                       workAnchorId === undefined && complete && waiting
                         ? "synchronizing"
                         : latest.status,
                     history:
                       workAnchorId === undefined && complete
-                        ? { ...applyHistoryPageMeta(latest.history, page), loading: keepPaging }
-                        : { ...latest.history, expanded: true },
+                        ? {
+                            ...applyHistoryPageMeta(latest.history, page, addedUserTurns),
+                            loading: keepPaging,
+                          }
+                        : {
+                            ...latest.history,
+                            expanded: true,
+                            userTurnsBeforeWindow: withOlderUserTurns(
+                              latest.history.userTurnsBeforeWindow,
+                              addedUserTurns,
+                            ),
+                          },
                   },
                 ];
               },
@@ -1012,6 +1043,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                           error: null,
                           expanded: false,
                           latestLocalTurnOrdinal: httpResult.history.latestLocalTurnOrdinal ?? null,
+                          userTurnsBeforeWindow: userTurnsBeforeWindowOf(httpResult.history),
                         }
                       : EMPTY_THREAD_HISTORY_META;
                   yield* setThread(httpResult.snapshot.projection, { history });

@@ -3810,6 +3810,8 @@ export const OrchestrationV2ThreadDetailSnapshot = Schema.Struct({
   historyCursor: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   hasMoreHistory: Schema.optionalKey(Schema.Boolean),
   latestLocalTurnOrdinal: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
+  /** Prompts before the projection's first prompt; clients number prompts ("Turn N") from it. */
+  userTurnsBeforeWindow: Schema.optionalKey(NonNegativeInt),
 });
 export type OrchestrationV2ThreadDetailSnapshot = typeof OrchestrationV2ThreadDetailSnapshot.Type;
 
@@ -3821,6 +3823,7 @@ export const OrchestrationV2ThreadBoundedSnapshot = withRecordIdTable(
     historyCursor: Schema.NullOr(TrimmedNonEmptyString),
     hasMoreHistory: Schema.Boolean,
     latestLocalTurnOrdinal: Schema.NullOr(NonNegativeInt),
+    userTurnsBeforeWindow: Schema.optionalKey(NonNegativeInt),
     /**
      * Set only for clients that opted in: `projection.turnItems` omits the items
      * of local visible rows, which lead the full list. Clients must restore them
@@ -3907,6 +3910,7 @@ export const OrchestrationV2ThreadStreamItem = withRecordIdTable(
       historyCursor: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
       hasMoreHistory: Schema.optionalKey(Schema.Boolean),
       latestLocalTurnOrdinal: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
+      userTurnsBeforeWindow: Schema.optionalKey(NonNegativeInt),
       turnItemsOmitLocalVisible: Schema.optionalKey(Schema.Literal(true)),
       idTable: IdTableMarker,
     }),

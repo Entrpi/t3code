@@ -621,6 +621,7 @@ describe("EnvironmentThreads", () => {
           historyCursor: null,
           hasMoreHistory: false,
           latestLocalTurnOrdinal: null,
+          userTurnsBeforeWindow: 0,
         },
       ]);
     }),

@@ -63,6 +63,8 @@ import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitatio
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import { hostedThreadLink, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { PROMPT_LINK_MAX_PROMPT_LENGTH } from "@t3tools/shared/promptLinks";
+import { formatTimeAgo } from "@t3tools/shared/orchestrationTiming";
+import { useNowMinuteMs } from "../../lib/clock";
 import {
   parseComposerContextHref,
   collectComposerContextReferences,
@@ -369,6 +371,7 @@ export interface ThreadFeedProps {
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
   readonly historyControls?: ThreadFeedHistoryControls;
+  readonly turnNumberByMessageId?: ReadonlyMap<MessageId, number> | undefined;
   readonly contentMaxWidth?: number;
   readonly contentSideInsets?: { readonly left: number; readonly right: number };
   readonly layoutVariant?: LayoutVariant;
@@ -1646,6 +1649,36 @@ function RunFoldButton({
   );
 }
 
+/** Tapping a prompt's time swaps it for its turn number and age, the web tooltip's content. */
+function PromptTime(props: {
+  readonly createdAt: string;
+  readonly label: string;
+  readonly turnNumber: number | undefined;
+}) {
+  const [showTurn, setShowTurn] = useState(false);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityHint="Shows the turn number and how long ago"
+      hitSlop={8}
+      onPress={() => setShowTurn((shown) => !shown)}
+    >
+      <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
+        {showTurn ? (
+          <TurnAge createdAt={props.createdAt} turnNumber={props.turnNumber} />
+        ) : (
+          props.label
+        )}
+      </Text>
+    </Pressable>
+  );
+}
+
+function TurnAge(props: { readonly createdAt: string; readonly turnNumber: number | undefined }) {
+  const age = formatTimeAgo(props.createdAt, useNowMinuteMs());
+  return props.turnNumber === undefined ? age : `Turn ${props.turnNumber} · ${age}`;
+}
+
 function renderFeedEntry(
   info: { item: ThreadFeedRow; index: number },
   props: Pick<
@@ -1657,6 +1690,7 @@ function renderFeedEntry(
     | "onEditPendingMessage"
     | "threadId"
     | "workspaceRoot"
+    | "turnNumberByMessageId"
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -2187,9 +2221,17 @@ function renderFeedEntry(
                   ·
                 </Text>
               ) : null}
-              <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
-                {entry.pendingMessage && !entry.acknowledged ? "Pending" : timestampLabel}
-              </Text>
+              {entry.pendingMessage && !entry.acknowledged ? (
+                <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
+                  Pending
+                </Text>
+              ) : (
+                <PromptTime
+                  createdAt={message.createdAt}
+                  label={timestampLabel}
+                  turnNumber={props.turnNumberByMessageId?.get(message.id)}
+                />
+              )}
               {props.onEditPendingMessage !== null &&
               entry.pendingMessage &&
               !entry.acknowledged &&
@@ -3744,6 +3786,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             onEditPendingMessage: props.onEditPendingMessage,
             onUseArtifactTemplate: props.onUseArtifactTemplate,
             threadId: props.threadId,
+            turnNumberByMessageId: props.turnNumberByMessageId,
             copiedRowId,
             expandedWorkRows,
             workRowSizing,

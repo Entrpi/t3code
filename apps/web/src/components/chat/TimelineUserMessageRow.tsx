@@ -78,6 +78,8 @@ import { cn } from "~/lib/utils";
 import { markdownProseDirection } from "~/textDirection";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
+import { formatTimeAgo } from "@t3tools/shared/orchestrationTiming";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { WorkflowOpeningBlock } from "./WorkflowOpeningBlock";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
 import {
@@ -792,7 +794,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           {formatDayAwareTimestamp(row.message.createdAt, ctx.timestampFormat)}
         </TooltipTrigger>
         <TooltipPopup>
-          {formatChatTimestampTooltip(row.message.createdAt, ctx.timestampFormat)}
+          {row.turnNumber === undefined ? null : <div>Turn {row.turnNumber}</div>}
+          <div>{formatChatTimestampTooltip(row.message.createdAt, ctx.timestampFormat)}</div>
+          <TimeAgo timestamp={row.message.createdAt} />
         </TooltipPopup>
       </Tooltip>
       <div className={cn("flex items-center gap-0.5", floatActions && "flex-wrap justify-end")}>
@@ -1045,6 +1049,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
 const ACTIONS_REVEAL_CLASS_NAME =
   "items-center text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100";
+
+function TimeAgo(props: { readonly timestamp: string }) {
+  // The minute tick has no offset; it is UTC.
+  return <div>{formatTimeAgo(props.timestamp, Date.parse(`${useNowMinute()}:00Z`))}</div>;
+}
 
 function UserMessageIntentMarker({
   intent,

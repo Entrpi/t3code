@@ -83,6 +83,8 @@ export type BoundedProjectionResult = {
   readonly historyCursor: string | null;
   readonly hasMoreHistory: boolean;
   readonly latestLocalTurnOrdinal: number | null;
+  /** Prompts before the window's first prompt, or all of them when the window shows none. */
+  readonly userTurnsBeforeWindow?: number;
 };
 
 export class InvalidThreadHistoryCursorError extends Schema.TaggedError<InvalidThreadHistoryCursorError>()(
@@ -630,6 +632,8 @@ export function buildBoundedThreadProjection(input: {
   readonly projection: OrchestrationV2ThreadProjection;
   readonly snapshotSequence: number;
   readonly policy?: ThreadHistoryPagePolicy | undefined;
+  /** The thread's visible prompts in timeline order, as `sourceThreadId:sourceItemId`. */
+  readonly userTurnKeys?: ReadonlyArray<string> | undefined;
 }): BoundedProjectionResult {
   const policy = input.policy ?? THREAD_HISTORY_PAGE_POLICY;
   const threadId = input.projection.thread.id;
@@ -751,5 +755,20 @@ export function buildBoundedThreadProjection(input: {
     historyCursor: window.nextCursor,
     hasMoreHistory: window.hasMoreHistory,
     latestLocalTurnOrdinal,
+    ...(input.userTurnKeys === undefined
+      ? {}
+      : { userTurnsBeforeWindow: userTurnsBefore(input.userTurnKeys, visibleTurnItems) }),
   };
+}
+
+function userTurnsBefore(
+  userTurnKeys: ReadonlyArray<string>,
+  window: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): number {
+  const positions = new Map(userTurnKeys.map((key, position) => [key, position]));
+  for (const row of window) {
+    const position = positions.get(`${row.sourceThreadId}:${row.sourceItemId}`);
+    if (position !== undefined) return position;
+  }
+  return userTurnKeys.length;
 }

@@ -257,6 +257,7 @@ export interface ThreadDetailScreenProps {
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   readonly threadSyncStatus?: EnvironmentThreadStatus;
   readonly historyControls?: ThreadFeedHistoryControls;
+  readonly turnNumberByMessageId?: ReadonlyMap<MessageId, number>;
   readonly activeThreadBusy: boolean;
   readonly canStopThread: boolean;
   readonly queuedRunEdit: QueuedRunEdit | null;
@@ -1498,6 +1499,7 @@ function ThreadDetailBody(
                 }
                 contentMaxWidth={contentMaxWidth}
                 historyControls={props.historyControls}
+                turnNumberByMessageId={props.turnNumberByMessageId}
                 contentSideInsets={nativeMetrics?.safeArea}
                 layoutVariant={layoutVariant}
                 usesAutomaticContentInsets={props.usesAutomaticContentInsets}

@@ -60,6 +60,9 @@ export function boundedSnapshotResponseFields(input: {
     historyCursor: bounded.historyCursor,
     hasMoreHistory: bounded.hasMoreHistory,
     latestLocalTurnOrdinal: bounded.latestLocalTurnOrdinal,
+    ...(bounded.userTurnsBeforeWindow === undefined
+      ? {}
+      : { userTurnsBeforeWindow: bounded.userTurnsBeforeWindow }),
     ...(compactProjection === null ? {} : { turnItemsOmitLocalVisible: true as const }),
     ...(input.compactIds ? { idTable: true as const } : {}),
   };
@@ -68,6 +71,7 @@ export function boundedSnapshotResponseFields(input: {
 export function buildBoundedThreadStreamSnapshot(input: {
   readonly snapshotSequence: number;
   readonly projection: OrchestrationV2ThreadProjection;
+  readonly userTurnKeys?: ReadonlyArray<string> | undefined;
   readonly compactTurnItems?: boolean;
   readonly dedupeBodies?: boolean;
   readonly compactIds?: boolean;
@@ -75,6 +79,7 @@ export function buildBoundedThreadStreamSnapshot(input: {
   const bounded = buildBoundedThreadProjection({
     snapshotSequence: input.snapshotSequence,
     projection: projectThreadProjectionForWire(input.projection),
+    userTurnKeys: input.userTurnKeys,
   });
   return {
     kind: "snapshot",

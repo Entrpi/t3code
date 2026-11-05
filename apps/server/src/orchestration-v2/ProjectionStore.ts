@@ -80,6 +80,7 @@ import {
 import {
   createOrchestrationV2TurnItemVisibility,
   isOrchestrationV2SupersededInterrupt,
+  isOrchestrationV2UserTurnStart,
 } from "@t3tools/shared/orchestrationV2Timeline";
 import {
   deriveBlockedOnThreadWait,
@@ -700,12 +701,15 @@ export interface ProjectionStoreV2Shape {
       readonly anchorItemId?: TurnItemId | undefined;
       readonly anchorThreadId?: ThreadId | undefined;
       readonly requiredRunId?: RunId | undefined;
+      /** Also list the thread's visible prompts, in timeline order, as `sourceThreadId:sourceItemId`. */
+      readonly userTurnKeys?: boolean | undefined;
     },
   ) => Effect.Effect<
     {
       readonly schemaVersion: number;
       readonly snapshotSequence: number;
       readonly projection: OrchestrationV2ThreadProjection;
+      readonly userTurnKeys?: ReadonlyArray<string>;
     },
     ProjectionStoreV2Error
   >;
@@ -713,7 +717,7 @@ export interface ProjectionStoreV2Shape {
 
 type ProjectionWindow = Omit<
   Parameters<ProjectionStoreV2Shape["getThreadSnapshotWindow"]>[1],
-  "anchorThreadId"
+  "anchorThreadId" | "userTurnKeys"
 > & {
   readonly suppressLocal?: boolean | undefined;
   readonly historyAnchor?: { readonly threadId: ThreadId; readonly itemId: TurnItemId } | undefined;
@@ -5654,6 +5658,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       threadId: ThreadId,
       seen: ReadonlySet<ThreadId>,
       includePersistentOutput?: boolean,
+      userMessagesOnly?: boolean,
     ) => Effect.Effect<
       {
         readonly records: ProjectionRecords<"runs" | "attempts">;
@@ -5662,7 +5667,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       },
       ProjectionStoreV2Error
     > = Effect.fn("ProjectionStore.readTimelineIndex")(
-      function* (threadId: ThreadId, seen: ReadonlySet<ThreadId>, includePersistentOutput = false) {
+      function* (
+        threadId: ThreadId,
+        seen: ReadonlySet<ThreadId>,
+        includePersistentOutput = false,
+        userMessagesOnly = false,
+      ) {
         const records = yield* getThreadRecords(threadId, ["runs", "attempts"]);
         const rows = yield* sql<{
           turn_item_id: string;
@@ -5699,6 +5709,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             : sql``
         }
         WHERE item.thread_id = ${threadId}
+        ${userMessagesOnly ? sql`AND item.type = 'user_message'` : sql``}
         ORDER BY item.ordinal ASC, item.turn_item_id ASC`;
         const runStatuses = new Map(records.runs.map((run) => [String(run.id), run.status]));
         const items: Array<TimelineIndexItem> = rows.map((row) => ({
@@ -5736,6 +5747,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           fork.threadId,
           new Set([...seen, threadId]),
           includePersistentOutput,
+          userMessagesOnly,
         );
         const sourceRun = source.records.runs.find((run) => run.id === fork.runId);
         let inherited: Array<TimelineIndexRow> = [];
@@ -6082,10 +6094,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 AND aggregate_kind = 'thread'
                 AND stream_id = ${threadId}
             `;
+            const userTurns = options.userTurnKeys
+              ? (yield* readTimelineIndex(threadId, new Set(), false, true)).visible
+                  .filter((row) => isOrchestrationV2UserTurnStart(row.item))
+                  .map((row) => `${row.sourceThreadId}:${row.sourceItemId}`)
+              : undefined;
             return {
               schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
               snapshotSequence: rows[0]?.snapshot_sequence ?? 0,
               projection: windowProjection,
+              ...(userTurns === undefined ? {} : { userTurnKeys: userTurns }),
             };
           }),
         )

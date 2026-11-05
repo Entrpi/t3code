@@ -298,14 +298,27 @@ describe("threadHistoryPaging", () => {
           ? { ...row, item: { ...row.item, output: "x".repeat(200_000) } }
           : row,
       );
+    const rowKey = (row: OrchestrationV2ProjectedTurnItem) =>
+      `${row.sourceThreadId}:${row.sourceItemId}`;
     const bounded = buildBoundedThreadProjection({
       projection: makeProjection(large),
       snapshotSequence: 1,
+      userTurnKeys: ["earlier-prompt", ...large.map(rowKey)],
     });
     expect(bounded.projection.visibleTurnItems.length).toBeLessThan(large.length);
     expect(boundedTimelineEncodedBytes(bounded.projection)).toBeLessThanOrEqual(
       THREAD_HISTORY_PAGE_POLICY.maxEncodedBytes,
     );
+    // Prompts trimmed from the window still count toward the first prompt's number.
+    const firstKept = rowKey(bounded.projection.visibleTurnItems[0]!);
+    expect(bounded.userTurnsBeforeWindow).toBe(1 + large.map(rowKey).indexOf(firstKept));
+    expect(
+      buildBoundedThreadProjection({
+        projection: makeProjection(large),
+        snapshotSequence: 1,
+        userTurnKeys: ["earlier-prompt"],
+      }).userTurnsBeforeWindow,
+    ).toBe(1);
   });
 
   it("keeps background turns with user turns, with main's 150-turn fan-out ceiling", () => {

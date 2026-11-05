@@ -2802,6 +2802,13 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         ),
         { concurrency: 4 },
       );
+      assert.deepEqual(
+        (yield* projectionStore.getThreadSnapshotWindow(threadId, {
+          rowLimit: 76,
+          userTurnKeys: true,
+        })).userTurnKeys,
+        [1, 1_000].map((ordinal) => `${threadId}:turn-item:bounded-sql-history:${ordinal}`),
+      );
       for (const snapshot of snapshots) {
         assert.lengthOf(snapshot.projection.turnItems, 76);
         assert.lengthOf(snapshot.projection.runs, 76);
@@ -7540,6 +7547,14 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           ["synthetic", "fork", "Forked from conversation"],
         ],
       );
+      const userTurnKeys = (threadId: ThreadId) =>
+        projectionStore
+          .getThreadSnapshotWindow(threadId, { rowLimit: 100, userTurnKeys: true })
+          .pipe(Effect.map((snapshot) => snapshot.userTurnKeys));
+      const promptKey = (ordinal: number) =>
+        `${sourceThreadId}:turn-item:projection-fork-source-rollback:user:${ordinal}`;
+      assert.deepEqual(yield* userTurnKeys(targetThreadId), [promptKey(1), promptKey(2)]);
+      assert.deepEqual(yield* userTurnKeys(sourceThreadId), [promptKey(1)]);
 
       yield* projectionStore.apply({
         id: EventId.make("event:projection-fork-source-rollback:run-3"),
