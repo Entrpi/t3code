@@ -220,8 +220,8 @@ transcription or cancellation; only the message text is sent when you submit.
 
 ## Queued messages
 
-On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is
-empty. Adding text or attachments replaces it with a send button that shows your
+While the agent is working, the composer shows **Interrupt**. Adding text or attachments adds a
+send button beside it. On web and desktop, the send button shows your
 [Follow-up behavior](#send-while-the-agent-is-working): a queue icon for Queue or a steer arrow for
 Steer. Click it or press your send shortcut to use that action. Hold `Cmd` on macOS or `Ctrl` on
 Windows and Linux to switch the button to the opposite action, then click, or use the opposite-action

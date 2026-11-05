@@ -262,6 +262,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   if (canInterrupt && !hasSendableContent && !isEditingQueuedMessage) {
     return renderStopGenerationButton(false);
   }
+  // While the agent works, Stop stays and a draft adds its send button beside it.
+  const stopBesideSubmit = canInterrupt ? renderStopGenerationButton(false) : null;
 
   const showResume = canResume && !hasSendableContent && !isEditingQueuedMessage;
 
@@ -352,7 +354,15 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       <TooltipPopup>{submitTooltip}</TooltipPopup>
     </Tooltip>
   );
-  if (compactTokens === null) return submit;
+  if (compactTokens === null) {
+    if (stopBesideSubmit === null) return submit;
+    return (
+      <div className="flex items-center gap-2">
+        {stopBesideSubmit}
+        {submit}
+      </div>
+    );
+  }
 
   return (
     <div data-chat-composer-compact-send="true" className="flex items-center gap-2">
@@ -385,6 +395,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           <div>{keepFullHistory ? "Click to compact first" : "Click to keep full history"}</div>
         </TooltipPopup>
       </Tooltip>
+      {stopBesideSubmit}
       {submit}
     </div>
   );
