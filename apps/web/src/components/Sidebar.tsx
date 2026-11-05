@@ -2,10 +2,7 @@ import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { attachSidebarTree } from "../lib/sidebarTree";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
-import {
-  subsessionDescendants,
-  threadSubsessionState,
-} from "@t3tools/client-runtime/state/subsessions";
+import { threadSubsessionState } from "@t3tools/client-runtime/state/subsessions";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
   dropThreadContext,
@@ -336,8 +333,6 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
-const NO_SUBSESSIONS: readonly SidebarThreadSummary[] = [];
-const NO_SUBSESSIONS_BY_ANCESTOR: ReadonlyMap<string, SidebarThreadSummary[]> = new Map();
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -1163,9 +1158,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
-  const subsessionsByAncestor = showSubsessions
-    ? subsessionDescendants(threads)
-    : NO_SUBSESSIONS_BY_ANCESTOR;
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -3450,7 +3442,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             variant={rowVariant}
                             lineageLink={lineageLinkByKey.get(threadKey) ?? null}
                             showSubsessions={showSubsessions}
-                            subsessions={subsessionsByAncestor.get(threadKey) ?? NO_SUBSESSIONS}
                             subsessionsCollapsed={collapsedSubsessionThreadKeys.includes(threadKey)}
                             onToggleSubsessions={toggleSubsessions}
                             navigationParent={

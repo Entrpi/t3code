@@ -16,7 +16,6 @@ import {
   type ServerConfig,
 } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { subsessionDescendants } from "@t3tools/client-runtime/state/subsessions";
 import {
   guessThreadLinkRef,
   hasThreadLinks,
@@ -35,7 +34,7 @@ import { projectGlyphImageAtom, projectGlyphKey } from "../native/ProjectChipIco
 import { projectFaviconUrlAtom } from "./assets";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom, serverEnvironment } from "./server";
-import { environmentThreadDetails, environmentThreadShells } from "./threads";
+import { environmentThreadDetails, environmentThreadShells, subsessionsAtom } from "./threads";
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("mobile-project:empty"),
@@ -203,28 +202,6 @@ export function useQuietThreadShell(ref: ScopedThreadRef | null): EnvironmentThr
 export function useChildThreadInputs(ref: ScopedThreadRef) {
   return useAtomValue(environmentThreadShells.childThreadInputsAtom(ref));
 }
-
-const NO_SUBSESSIONS: ReadonlyArray<EnvironmentThreadShell> = [];
-
-const subsessionDescendantsAtom = Atom.make((get) =>
-  subsessionDescendants(get(environmentThreadShells.threadShellsAtom)),
-).pipe(Atom.withLabel("mobile-subsession-descendants"));
-
-// Shells keep their identity until they change, so a row re-renders only for its own subsessions.
-const subsessionsAtom = Atom.family((key: string) => {
-  let previous = NO_SUBSESSIONS;
-  return Atom.make((get) => {
-    const next = get(subsessionDescendantsAtom).get(key) ?? NO_SUBSESSIONS;
-    if (
-      next.length === previous.length &&
-      next.every((thread, index) => thread === previous[index])
-    ) {
-      return previous;
-    }
-    previous = next;
-    return next;
-  }).pipe(Atom.withLabel(`mobile-subsessions:${key}`));
-});
 
 /** The shell's copies of a thread's subsessions at any depth; idle ones need its family read. */
 export function useSubsessions(ref: ScopedThreadRef): ReadonlyArray<EnvironmentThreadShell> {

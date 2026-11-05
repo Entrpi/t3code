@@ -5,6 +5,7 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
@@ -15,6 +16,7 @@ import {
   isListedThread,
   subsessionCountMisses,
   subsessionDescendants,
+  subsessionsAtomFamily,
   subsessionTree,
   threadSubsessionState,
   type SubsessionNode,
@@ -134,6 +136,27 @@ describe("subsessions", () => {
       [key("parent"), ["session", "nested"]],
       [key("session"), ["nested"]],
     ]);
+  });
+
+  it("keeps a thread's subsessions while only other threads change", () => {
+    const other = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      id: ThreadId.make("other"),
+    });
+    const session = child("session");
+    const shellsAtom = Atom.make<ReadonlyArray<EnvironmentThreadShell>>([session, other]);
+    const subsessionsAtom = subsessionsAtomFamily(
+      shellsAtom,
+      "test",
+    )(scopedThreadKey(scopeThreadRef(environmentId, parent)));
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(subsessionsAtom);
+    const before = registry.get(subsessionsAtom);
+    registry.set(shellsAtom, [session, { ...other, title: "renamed" }]);
+    expect(registry.get(subsessionsAtom)).toBe(before);
+    registry.set(shellsAtom, [{ ...session, title: "renamed" }, other]);
+    expect(registry.get(subsessionsAtom).map((row) => row.title)).toEqual(["renamed"]);
+    unmount();
   });
 
   it("names each row whose listed children disagree with its server count", () => {

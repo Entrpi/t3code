@@ -101,7 +101,7 @@ import {
   ThreadSearchPullRequestNumber,
 } from "../ThreadStatusIndicators";
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
-import { useThreadShell } from "../../state/entities";
+import { useSubsessions, useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { activeSubagentCount } from "@t3tools/client-runtime/state/subsessions";
 import {
@@ -545,8 +545,6 @@ type SidebarThreadRowProps = {
   // Where an Active row sits in a fork lineage of two or more, for the connector line.
   lineageLink: SidebarLineageLink | null;
   showSubsessions: boolean;
-  // The shell's copies of this thread's subsessions at any depth; the list reads idle ones itself.
-  subsessions: ReadonlyArray<SidebarThreadSummary>;
   // Kept by the sidebar, so a collapsed list stays collapsed across reloads.
   subsessionsCollapsed: boolean;
   onToggleSubsessions: (threadKey: string) => void;
@@ -668,6 +666,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
+  const subsessions = useSubsessions(props.showSubsessions ? threadRef : null);
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   const { leaseLiveStatus, rowRef: leaseRowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const { revealRef } = props;
@@ -1149,7 +1148,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       </span>
     ) : null;
   const diff = latestRunDiff(thread);
-  const openSubsessionCount = props.subsessions.filter(
+  const openSubsessionCount = subsessions.filter(
     (child) =>
       child.lineage.parentThreadId === thread.id &&
       child.archivedAt === null &&
@@ -1173,7 +1172,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       <SidebarSubsessionList
         environmentId={thread.environmentId}
         parentId={thread.id}
-        known={props.subsessions}
+        known={subsessions}
         count={subsessionCount}
         onSettle={onSettle}
       />

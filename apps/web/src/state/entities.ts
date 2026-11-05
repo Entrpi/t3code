@@ -35,7 +35,7 @@ import {
   allEnvironmentProjectSnapshotsReadyAtom,
   allEnvironmentShellsBootstrappedAtom,
 } from "./shell";
-import { environmentThreadDetails, environmentThreadShells } from "./threads";
+import { environmentThreadDetails, environmentThreadShells, subsessionsAtom } from "./threads";
 import { waitForAtomValue } from "./waitForAtomValue";
 
 const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
@@ -163,6 +163,11 @@ export function useQuietThreadShell(ref: ScopedThreadRef | null): EnvironmentThr
 /** Every thread shell, held through streaming ticks; see quietThreadShellAtom. */
 export function useQuietThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.quietThreadShellsAtom);
+}
+
+/** The shell's copies of a thread's subsessions at any depth; idle ones need its family read. */
+export function useSubsessions(ref: ScopedThreadRef | null): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(ref === null ? EMPTY_THREAD_SHELLS_ATOM : subsessionsAtom(threadKey(ref)));
 }
 
 export function useChildThreadInputs(ref: ScopedThreadRef | null) {

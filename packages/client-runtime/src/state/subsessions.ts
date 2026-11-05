@@ -5,8 +5,10 @@ import {
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
+import { arrayElementsEqual } from "./entities.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
 import { isThreadWorking } from "./threadInbox.ts";
 
@@ -139,6 +141,30 @@ export function subsessionDescendants(
     }
   }
   return byAncestor;
+}
+
+const NO_SUBSESSIONS: ReadonlyArray<EnvironmentThreadShell> = [];
+
+/**
+ * Each thread's subsessions from `shellsAtom`, by thread key. Shells keep their identity until
+ * they change, so a thread's list does too, and its row re-renders only for its own subsessions.
+ */
+export function subsessionsAtomFamily(
+  shellsAtom: Atom.Atom<ReadonlyArray<EnvironmentThreadShell>>,
+  label: string,
+): (key: string) => Atom.Atom<ReadonlyArray<EnvironmentThreadShell>> {
+  const descendantsAtom = Atom.make((get) => subsessionDescendants(get(shellsAtom))).pipe(
+    Atom.withLabel(`${label}-subsession-descendants`),
+  );
+  return Atom.family((key: string) => {
+    let previous = NO_SUBSESSIONS;
+    return Atom.make((get) => {
+      const next = get(descendantsAtom).get(key) ?? NO_SUBSESSIONS;
+      if (arrayElementsEqual(previous, next)) return previous;
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel(`${label}-subsessions:${key}`));
+  });
 }
 
 /** Where a delegated subsession stands: under its parent, or detached beside or apart from it. */
