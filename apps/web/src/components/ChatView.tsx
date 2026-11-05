@@ -717,7 +717,8 @@ export default function ChatView(props: ChatViewProps) {
   const composerExpandedHeightRef = useRef(0);
   const [scrollToEndClearance, setScrollToEndClearance] = useState(0);
   const fanoutSelectionsAtom = draftFanoutSelectionsAtom(routeThreadKey);
-  const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
+  const { sendInFlight: sendInFlightRef, stopRequested: stopRequestedRef } =
+    draftSendState(routeThreadKey);
   const multipleModelSelections = useAtomValue(fanoutSelectionsAtom);
   const setMultipleModelSelections = (
     selections: SetStateAction<ReadonlyArray<ModelSelection> | null>,
@@ -1803,14 +1804,21 @@ export default function ChatView(props: ChatViewProps) {
     composerRef.current?.focusAtEnd();
   };
   const focusComposerStable = useStableCallback(focusComposer);
+  // A send in flight already counts as work: Stop is there before its turn exists.
   const canInterruptRunningThread =
-    canOperateThread && deriveCanInterruptRunningThread(activeThread !== undefined, activeRuntime);
+    canOperateThread &&
+    (deriveCanInterruptRunningThread(activeThread !== undefined, activeRuntime) ||
+      (isSendBusy && !sendQueuesBehindSetup && multipleModelSelections === null));
   const onInterrupt = async () => {
     if (
       !activeThread ||
       !readEnvironmentScope(activeThread.environmentId, AuthOrchestrationOperateScope)
     )
       return;
+    if (sendInFlightRef.current) {
+      stopRequestedRef.current = true;
+      return;
+    }
     const result = await interruptThreadTurn({
       environmentId,
       input: { threadId: activeThread.id },
