@@ -3,11 +3,12 @@ import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import * as DateTime from "effect/DateTime";
 import type { ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 const state = vi.hoisted(() => ({
   projection: null as unknown,
   workflow: null as unknown,
+  commands: [] as unknown[],
 }));
 
 vi.mock(import("@t3tools/client-runtime/state/thread-workflows"), async (importOriginal) => ({
@@ -31,7 +32,9 @@ vi.mock(import("../../state/query"), async (importOriginal) => ({
 
 vi.mock(import("../../state/use-atom-command"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useAtomCommand: (() => async () => undefined) as never,
+  useAtomCommand: (() => async (args: unknown) => {
+    state.commands.push(args);
+  }) as never,
 }));
 
 vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
@@ -47,6 +50,7 @@ import { QueuedRunsControl } from "./QueuedRunsControl";
 function setup() {
   state.projection = null;
   state.workflow = null;
+  state.commands = [];
 }
 
 const baseProps = {
@@ -202,4 +206,38 @@ it("stays inside the timeline scroller instead of growing the chat column", asyn
   await expect.element(page.getByText("Later", { exact: true })).toBeInTheDocument();
   const column = screen.getByTestId("column").element();
   expect(column.scrollHeight).toBe(column.clientHeight);
+});
+
+it("removes a queued message only after confirming in place, and Escape backs out", async () => {
+  setup();
+  state.projection = { projection: { messages: [] } };
+  state.workflow = {
+    activeRun: { id: "run:active" },
+    canPromoteToSteer: true,
+    queuedRuns: [
+      {
+        run: { id: "run:queued", userMessageId: "message:queued" },
+        text: "Later",
+        attachments: [],
+      },
+    ],
+  };
+  await using _screen = await renderQueue();
+
+  await page.getByRole("button", { name: "Remove queued message", exact: true }).click();
+  const confirm = page.getByRole("button", { name: "Confirm remove queued message" });
+  await expect.element(confirm).toHaveFocus();
+  expect(state.commands).toEqual([]);
+  await userEvent.keyboard("{Escape}");
+  await expect
+    .element(page.getByRole("button", { name: "Remove queued message", exact: true }))
+    .toBeVisible();
+
+  await page.getByRole("button", { name: "Remove queued message", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm remove queued message" }).click();
+  await vi.waitFor(() =>
+    expect(state.commands).toEqual([
+      expect.objectContaining({ input: { threadId: "thread:test", runId: "run:queued" } }),
+    ]),
+  );
 });
