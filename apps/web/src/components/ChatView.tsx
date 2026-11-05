@@ -2067,6 +2067,9 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
 
+    // The send itself switches the modes, with the message, on servers that support it.
+    if (serverConfig?.environment.capabilities.sendCarriesThreadModes === true) return result;
+
     if (input.runtimeMode !== serverThread.runtimeMode) {
       result = mapAtomCommandResult(
         await setThreadRuntimeMode({

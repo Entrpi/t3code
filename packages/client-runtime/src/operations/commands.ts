@@ -758,6 +758,11 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     });
   }
 
+  // Older servers ignore these fields; their clients set the modes before sending.
+  const modes =
+    (yield* getInitialServerConfig()).environment.capabilities.sendCarriesThreadModes === true
+      ? { runtimeMode: input.runtimeMode, interactionMode: input.interactionMode }
+      : {};
   const requestedMode = input.dispatchMode ?? "auto";
   if (requestedMode === "start") {
     return yield* dispatch({
@@ -777,6 +782,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         : { idleCompaction: input.message.idleCompaction }),
       attachments,
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+      ...modes,
       ...(input.sourceProposedPlan === undefined
         ? {}
         : { sourcePlanRef: input.sourceProposedPlan }),
@@ -803,6 +809,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     attachments,
     ...(input.titleSeed === undefined ? {} : { titleSeed: input.titleSeed }),
     ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+    ...modes,
     ...(input.sourceProposedPlan === undefined ? {} : { sourcePlanRef: input.sourceProposedPlan }),
     ...(requestedMode !== "queue" ? { deliveryIntent: requestedMode } : {}),
     dispatchMode,

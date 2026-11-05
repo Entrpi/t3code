@@ -907,6 +907,55 @@ it.effect("a held queue keeps a message being edited from starting until it resu
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("a send changes the thread's modes with the message; a queued one when it starts", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:send-modes");
+    const modes = orchestrator
+      .getThreadProjection(threadId)
+      .pipe(Effect.map(({ thread }) => [thread.runtimeMode, thread.interactionMode]));
+    const sendWithModes = (
+      text: string,
+      type: "start_immediately" | "queue_after_active",
+      runtimeMode: "approval-required" | "full-access",
+      interactionMode: "default" | "plan",
+    ) =>
+      orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`send-modes:${text}`),
+        threadId,
+        messageId: MessageId.make(`message:${threadId}:${text}`),
+        text,
+        attachments: [],
+        dispatchMode: { type },
+        runtimeMode,
+        interactionMode,
+        createdBy: "user",
+        creationSource: "web",
+      });
+    yield* createWatchingThread(threadId, 14);
+    yield* sendWithModes("plan it", "start_immediately", "approval-required", "plan");
+    assert.deepEqual(yield* modes, ["approval-required", "plan"]);
+
+    yield* sendWithModes("build it", "queue_after_active", "full-access", "default");
+    assert.deepEqual(yield* modes, ["approval-required", "plan"]);
+    const active = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+    const now = yield* DateTime.now;
+    yield* projections.apply({
+      id: EventId.make("event:send-modes:completed"),
+      type: "run.updated",
+      threadId,
+      runId: active.id,
+      occurredAt: now,
+      payload: { ...active, status: "completed", completedAt: now },
+    });
+    yield* orchestrator.resumeQueuedRuns;
+    assert.deepEqual((yield* threadState(threadId)).runs, ["completed", "starting"]);
+    assert.deepEqual(yield* modes, ["full-access", "default"]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a run Stop reached cannot delegate or start a watch, even after it ends", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
