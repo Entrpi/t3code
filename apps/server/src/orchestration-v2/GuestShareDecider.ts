@@ -245,6 +245,14 @@ export function guestShareAfterCancelledSend(
   };
 }
 
+/** A guest's message cannot change the thread's modes. */
+export function withoutSendModes<
+  C extends { readonly runtimeMode?: unknown; readonly interactionMode?: unknown },
+>(command: C): Omit<C, "runtimeMode" | "interactionMode"> {
+  const { runtimeMode: _runtimeMode, interactionMode: _interactionMode, ...rest } = command;
+  return rest;
+}
+
 /** Guest attribution comes only from `decideGuestMessageSend`; a client cannot claim it. */
 export function withoutGuestAttribution<
   C extends { readonly context?: OrchestrationMessageContext | undefined },

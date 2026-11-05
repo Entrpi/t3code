@@ -792,7 +792,9 @@ export function createThreadOutboxDelivery(): {
       return restoreQueuedMessage(queuedMessage, runtimeModeDenial);
     }
 
-    if (settings.runtimeMode !== thread.runtimeMode) {
+    // The send itself switches the modes, with the message, on servers that support it.
+    const sendCarriesModes = serverConfig.environment.capabilities.sendCarriesThreadModes === true;
+    if (!sendCarriesModes && settings.runtimeMode !== thread.runtimeMode) {
       if (!hasAccess()) return true;
       const runtimeResult = await runDeliveryCommand(threadEnvironment.setRuntimeMode, {
         environmentId: queuedMessage.environmentId,
@@ -809,7 +811,7 @@ export function createThreadOutboxDelivery(): {
       }
     }
 
-    if (settings.interactionMode !== thread.interactionMode) {
+    if (!sendCarriesModes && settings.interactionMode !== thread.interactionMode) {
       if (!hasAccess()) return true;
       const interactionResult = await runDeliveryCommand(threadEnvironment.setInteractionMode, {
         environmentId: queuedMessage.environmentId,

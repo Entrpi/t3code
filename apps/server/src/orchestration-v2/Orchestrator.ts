@@ -135,6 +135,7 @@ import {
   guestShareAfterCancelledSend,
   releasedGuestAttachmentIds,
   withoutGuestAttribution,
+  withoutSendModes,
   decideGuestShareCommand,
   type GuestShareCommand,
 } from "./GuestShareDecider.ts";
@@ -1688,7 +1689,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return;
       }
       // Waits without a hold: lowering the thread's mode starts the queue again.
-      if (isRuntimeModeAbove(projection.thread.runtimeMode, runtimeModeCeiling?.maxRuntimeMode)) {
+      if (
+        isRuntimeModeAbove(
+          queuedRun.runtimeMode ?? projection.thread.runtimeMode,
+          runtimeModeCeiling?.maxRuntimeMode,
+        )
+      ) {
         return;
       }
       // Failed worktree creation would run queued work in the project checkout; wait for the user.
@@ -2244,6 +2250,35 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               },
             ]
           : [];
+      // Each thread event carries the whole thread, so all of them carry every change.
+      const startedThread = {
+        ...projection.thread,
+        ...(selectionChanged
+          ? {
+              providerInstanceId: queuedRun.providerInstanceId,
+              modelSelection: queuedRun.modelSelection,
+            }
+          : {}),
+        ...(queuedRun.runtimeMode === undefined ? {} : { runtimeMode: queuedRun.runtimeMode }),
+        ...(queuedRun.interactionMode === undefined
+          ? {}
+          : { interactionMode: queuedRun.interactionMode }),
+        updatedAt: now,
+      };
+      const startedModeEvents = [
+        ...(startedThread.runtimeMode === projection.thread.runtimeMode
+          ? []
+          : [{ type: "thread.runtime-mode-updated" as const }]),
+        ...(startedThread.interactionMode === projection.thread.interactionMode
+          ? []
+          : [{ type: "thread.interaction-mode-updated" as const }]),
+      ].map(({ type }) => ({
+        type,
+        threadId,
+        providerInstanceId: startedThread.providerInstanceId,
+        occurredAt: now,
+        payload: startedThread,
+      }));
       yield* writeSystemEvents(
         [
           ...(selectionChanged
@@ -2256,15 +2291,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   threadId,
                   providerInstanceId: queuedRun.providerInstanceId,
                   occurredAt: now,
-                  payload: {
-                    ...projection.thread,
-                    providerInstanceId: queuedRun.providerInstanceId,
-                    modelSelection: queuedRun.modelSelection,
-                    updatedAt: now,
-                  },
+                  payload: startedThread,
                 },
               ]
             : []),
+          ...startedModeEvents,
           ...(handoff === null || transferId === null || latestHandoffRun === undefined
             ? []
             : [
@@ -5495,6 +5526,65 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ]);
   });
 
+  /**
+   * Switches the thread to the modes a message was sent with, in the message's transaction. A
+   * queued message keeps them on its run until it starts. Reads the planned thread so a model
+   * switch emitted with the message is kept.
+   */
+  const applySentThreadModes = Effect.fn("Orchestrator.applySentThreadModes")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    if (command.runtimeMode === undefined && command.interactionMode === undefined) return;
+    const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    const run = projection.runs.find((candidate) => candidate.userMessageId === command.messageId);
+    if (run?.status === "queued") {
+      if (
+        runtimeModeCeiling !== undefined &&
+        command.runtimeMode !== undefined &&
+        isRuntimeModeAbove(command.runtimeMode, runtimeModeCeiling.maxRuntimeMode)
+      ) {
+        return yield* new OrchestratorRuntimeModeAboveCeilingError({
+          commandId: command.commandId,
+          threadId: command.threadId,
+          runtimeMode: command.runtimeMode,
+          refused: "mode",
+          ...runtimeModeCeiling,
+        });
+      }
+      return;
+    }
+    const now = yield* DateTime.now;
+    let thread = projection.thread;
+    for (const change of [
+      command.runtimeMode === undefined || command.runtimeMode === thread.runtimeMode
+        ? null
+        : ({ type: "thread.runtime-mode-updated", runtimeMode: command.runtimeMode } as const),
+      command.interactionMode === undefined || command.interactionMode === thread.interactionMode
+        ? null
+        : ({
+            type: "thread.interaction-mode-updated",
+            interactionMode: command.interactionMode,
+          } as const),
+    ]) {
+      if (change === null) continue;
+      thread =
+        change.type === "thread.runtime-mode-updated"
+          ? { ...thread, runtimeMode: change.runtimeMode, updatedAt: now }
+          : { ...thread, interactionMode: change.interactionMode, updatedAt: now };
+      yield* emit(
+        events,
+        command,
+      )({
+        type: change.type,
+        threadId: command.threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: thread,
+      });
+    }
+  });
+
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -6128,6 +6218,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ordinal,
         providerInstanceId: modelSelection.instanceId,
         modelSelection,
+        ...(command.runtimeMode === undefined ? {} : { runtimeMode: command.runtimeMode }),
+        ...(command.interactionMode === undefined
+          ? {}
+          : { interactionMode: command.interactionMode }),
         providerThreadId: queuedProviderThread.id,
         userMessageId: command.messageId,
         rootNodeId,
@@ -13307,11 +13401,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           guestSend === undefined
             ? withoutGuestAttribution(command)
             : {
-                ...command,
+                ...withoutSendModes(command),
                 text: guestSend.text,
                 context: { version: 1 as const, records: [], guest: guestSend.guest },
               };
         cancelUnsettledEffects = yield* dispatchMessage(dispatched, events, effects);
+        yield* applySentThreadModes(dispatched, events);
         yield* recordSubagentFollowup(dispatched, events).pipe(mapDispatchError(command));
         break;
       }
@@ -13608,7 +13703,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const shell = yield* projectionStore
         .getThreadShell(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
-      if (shell !== null) yield* refuseAboveDispatchModeLimit(command, threadId, shell);
+      if (shell !== null) {
+        yield* refuseAboveDispatchModeLimit(command, threadId, {
+          runtimeMode:
+            (command.type === "message.dispatch" ? command.runtimeMode : undefined) ??
+            shell.runtimeMode,
+          interactionMode:
+            (command.type === "message.dispatch" ? command.interactionMode : undefined) ??
+            shell.interactionMode,
+        });
+      }
     }
 
     const plan = yield* dispatchOnce(command, sideChatIds).pipe(

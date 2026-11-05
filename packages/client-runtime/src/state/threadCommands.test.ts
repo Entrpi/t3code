@@ -104,6 +104,9 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
     }),
     session: yield* SubscriptionRef.make(
       Option.some({
+        initialConfig: Effect.succeed({
+          environment: { capabilities: { sendCarriesThreadModes: true } },
+        }),
         client: {
           [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
             Effect.gen(function* () {
@@ -192,7 +195,12 @@ describe("history loading", () => {
       yield* Deferred.succeed(second.reply, { sequence: 2 });
       const results = yield* Effect.promise(() => Promise.all([history, send, control]));
 
-      expect(first.command).toMatchObject({ type: "message.dispatch", threadId: THREAD_ID });
+      expect(first.command).toMatchObject({
+        type: "message.dispatch",
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
       expect(second.command).toMatchObject({ type: "run.interrupt", threadId: controlThreadId });
       expect(results.map((value) => value._tag)).toEqual(["Success", "Success", "Success"]);
     }),

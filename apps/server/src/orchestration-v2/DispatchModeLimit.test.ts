@@ -228,6 +228,20 @@ it.layer(layerWithCeiling)("runtime mode ceiling", (it) => {
         })
         .pipe(Effect.flip);
       assert.equal(raise._tag, "OrchestratorRuntimeModeAboveCeilingError");
+      // A send carrying the mode is refused too, whether it starts now or waits in the queue.
+      const sendRaise = yield* orchestrator
+        .dispatch({ ...sendMessage(threadId, "ceiling-user:send-raise"), runtimeMode: "auto" })
+        .pipe(Effect.flip);
+      assert.equal(sendRaise._tag, "OrchestratorRuntimeModeAboveCeilingError");
+      yield* orchestrator.dispatch(sendMessage(threadId, "ceiling-user:running"));
+      const queuedRaise = yield* orchestrator
+        .dispatch({
+          ...sendMessage(threadId, "ceiling-user:queued-raise"),
+          dispatchMode: { type: "queue_after_active" },
+          runtimeMode: "auto",
+        })
+        .pipe(Effect.flip);
+      assert.equal(queuedRaise._tag, "OrchestratorRuntimeModeAboveCeilingError");
       yield* orchestrator.dispatch({
         type: "thread.runtime-mode.set",
         commandId: CommandId.make("raise-to-ceiling:ceiling-user"),
