@@ -39,6 +39,12 @@ vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => mocks.editQueuedRun,
 }));
 
+// Holding and resuming the queue is covered by the edit store's own tests.
+vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
+  ...(await importOriginal()),
+  runAtomCommand: async () => ({ _tag: "Success" }),
+}));
+
 vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentIdentificationMode: () => "none",
 }));

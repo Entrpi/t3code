@@ -34,6 +34,7 @@ import {
   mergeThreadBack,
   promoteQueuedRun,
   resumeThreadQueue,
+  holdThreadQueue,
   retryWorkspacePreparation,
   linkThreadPullRequest,
   respondToThreadApproval,
@@ -344,6 +345,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     resumeThreadQueue: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:resume-queue",
       execute: resumeThreadQueue,
+      scheduler,
+      concurrency,
+    }),
+    holdThreadQueue: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:hold-queue",
+      execute: holdThreadQueue,
       scheduler,
       concurrency,
     }),

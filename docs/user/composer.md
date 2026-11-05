@@ -258,7 +258,9 @@ run or one that hit a usage limit, even with nothing queued. Sending a new messa
 running. You can edit or remove held messages without starting them.
 
 The pencil on a queued message opens it in the composer for editing. The original message
-stays in the queue until you save, and it is highlighted while you edit. The message's
+stays in the queue until you save, and it is highlighted while you edit. The queue waits while
+you edit, so the message never starts with its old text; saving or cancelling lets it continue.
+If you leave an edit open on another device, press **Resume** to continue the queue. The message's
 attachments appear above the text with a remove control, and new images can be added the usual way.
 The checkmark saves the queued message in place; **Cancel** next to it leaves it unchanged. Whatever
 you had typed in the composer before starting the edit is restored afterwards. If the queued

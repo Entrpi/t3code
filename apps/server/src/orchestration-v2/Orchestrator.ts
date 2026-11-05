@@ -607,6 +607,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "queued-message.promote-to-steer":
     case "queued-run.start":
     case "queue.resume":
+    case "queue.hold":
     case "queued-run.reorder":
     case "queued-run.cancel":
     case "queued-run.edit":
@@ -13714,6 +13715,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             threadId: command.threadId,
             occurredAt: now,
             payload: projection.thread,
+          });
+        }
+        break;
+      }
+      case "queue.hold": {
+        // Holds the queue as Stop does, so a message being edited cannot start with its old text.
+        const projection = yield* loadProjectionForCommand(command, ["runs"]);
+        if (projection.thread.archivedAt !== null || projection.thread.deletedAt !== null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} is not active.`,
+          });
+        }
+        const now = yield* DateTime.now;
+        for (const run of projection.runs) {
+          if (run.status !== "queued" || run.queueHeld === true) continue;
+          yield* emit(
+            events,
+            command,
+          )({
+            type: "run.updated",
+            threadId: command.threadId,
+            runId: run.id,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...run, queueHeld: true },
           });
         }
         break;

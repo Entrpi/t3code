@@ -872,6 +872,41 @@ it.effect.each([false, true])(
     }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("a held queue keeps a message being edited from starting until it resumes", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:edit-hold");
+    yield* createWatchingThread(threadId, 13);
+    yield* send(threadId, "active", "start_immediately");
+    yield* send(threadId, "being edited", "queue_after_active");
+    yield* orchestrator.dispatch({
+      type: "queue.hold",
+      commandId: CommandId.make("hold-for-edit"),
+      threadId,
+    });
+    const active = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+    const now = yield* DateTime.now;
+    yield* projections.apply({
+      id: EventId.make("event:edit-hold:completed"),
+      type: "run.updated",
+      threadId,
+      runId: active.id,
+      occurredAt: now,
+      payload: { ...active, status: "completed", completedAt: now },
+    });
+    yield* orchestrator.resumeQueuedRuns;
+    assert.deepEqual((yield* threadState(threadId)).runs, ["completed", "queued:held"]);
+
+    yield* orchestrator.dispatch({
+      type: "queue.resume",
+      commandId: CommandId.make("resume-after-edit"),
+      threadId,
+    });
+    assert.deepEqual((yield* threadState(threadId)).runs, ["completed", "starting"]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a run Stop reached cannot delegate or start a watch, even after it ends", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
