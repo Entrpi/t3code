@@ -30,7 +30,7 @@ describe("classifyShellCommand", () => {
     ["tail -f a.log", [{ kind: "read", path: "a.log" }]],
     ["nl -ba a.ts", [{ kind: "read", path: "a.ts" }]],
   ])("reads files, with the line range when the command names one: %s", (command, actions) => {
-    expect(classifyShellCommand(command)).toEqual({ actions, other: false });
+    expect(classifyShellCommand(command)).toMatchObject({ actions, other: false });
   });
 
   it.each([
@@ -43,7 +43,7 @@ describe("classifyShellCommand", () => {
     ],
     ["find . -name '*.test.ts'", [{ kind: "search", query: "*.test.ts", path: "." }]],
   ])("finds searches and their query: %s", (command, actions) => {
-    expect(classifyShellCommand(command)).toEqual({ actions, other: false });
+    expect(classifyShellCommand(command)).toMatchObject({ actions, other: false });
   });
 
   it.each([
@@ -103,7 +103,7 @@ describe("classifyShellCommand", () => {
       ],
     ],
   ])("lists every file action in command order: %s", (command, actions) => {
-    expect(classifyShellCommand(command)).toEqual({ actions, other: false });
+    expect(classifyShellCommand(command)).toMatchObject({ actions, other: false });
   });
 
   it.each([
@@ -111,7 +111,7 @@ describe("classifyShellCommand", () => {
     ["git -C repo commit --amend --no-edit", [{ kind: "commit" }], false],
     ["vp test run && git commit -am wip && git push", [{ kind: "commit" }], true],
   ])("counts a commit anywhere in a chain: %s", (command, actions, other) => {
-    expect(classifyShellCommand(command)).toEqual({ actions, other });
+    expect(classifyShellCommand(command)).toMatchObject({ actions, other });
   });
 
   it.each([

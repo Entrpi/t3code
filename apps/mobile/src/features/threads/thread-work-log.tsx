@@ -84,6 +84,8 @@ import {
   resolveWorkEntryToolPresentation,
   toolGroupAction,
   type ToolGroupSummaryKind,
+  type WorkLogSummaryPart,
+  type WorkLogSummaryTone,
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
@@ -1102,6 +1104,11 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
   const iconIsDestructive =
     !isSystemNotice && !isUsageLimit && (row.icon === "alert" || row.icon === "warning");
   const failed = row.status === "failure";
+  const madeCommit =
+    row.groupStandIn?.label === undefined &&
+    !failed &&
+    !iconIsDestructive &&
+    (row.workEntry.commandEffects?.commits ?? 0) > 0;
   const toolIcon = row.workEntry.toolIcon ?? row.workEntry.toolSource?.icon;
   const icon = reasoning ? "brain" : (toolPresentation?.icon ?? workRowSymbolName(row.icon));
 
@@ -1171,13 +1178,23 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
                         ? "accent-adaptive-rose-600-400"
                         : failed
                           ? "accent-danger-foreground/40"
-                          : undefined
+                          : madeCommit
+                            ? "accent-adaptive-violet-600-400"
+                            : undefined
                   }
                 />
               )}
             </WorkLogIconSlot>
             <WorkLogLabel
-              tone={isUsageLimit ? "warning" : iconIsDestructive ? "danger" : "default"}
+              tone={
+                isUsageLimit
+                  ? "warning"
+                  : iconIsDestructive
+                    ? "danger"
+                    : madeCommit
+                      ? "commit"
+                      : "default"
+              }
             >
               {fileAction && filePath !== null ? (
                 <>
@@ -1403,6 +1420,12 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
   );
 };
 
+const SUMMARY_TONE_CLASS_NAMES: Record<WorkLogSummaryTone, string> = {
+  "file-change": "text-adaptive-sky-600-400",
+  "file-delete": "text-adaptive-rose-600-400",
+  commit: "text-adaptive-violet-600-400",
+};
+
 export function ThreadWorkGroupToggle(props: {
   readonly environmentId: EnvironmentId;
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
@@ -1411,6 +1434,7 @@ export function ThreadWorkGroupToggle(props: {
   readonly steps?: number | undefined;
   readonly iconSubtleColor: import("react-native").ColorValue;
   readonly summary: string;
+  readonly summaryParts?: ReadonlyArray<WorkLogSummaryPart> | undefined;
   readonly summaryKind: ToolGroupSummaryKind;
   readonly summaryToolIcon?: "browser" | "device" | "t3-code" | "pull-request" | "brain";
   readonly themeAppearance: "light" | "dark";
@@ -1490,7 +1514,19 @@ export function ThreadWorkGroupToggle(props: {
                     themeAppearance={props.themeAppearance}
                   />
                 </WorkLogIconSlot>
-                <WorkLogLabel key={props.rowSizing.textSizeKey}>{props.summary}</WorkLogLabel>
+                <WorkLogLabel key={props.rowSizing.textSizeKey}>
+                  {props.summaryParts === undefined
+                    ? props.summary
+                    : props.summaryParts.map((part) =>
+                        part.tone === undefined ? (
+                          part.text
+                        ) : (
+                          <Text key={part.text} className={SUMMARY_TONE_CLASS_NAMES[part.tone]}>
+                            {part.text}
+                          </Text>
+                        ),
+                      )}
+                </WorkLogLabel>
                 {stepsLabel ? (
                   <Text
                     selectable={false}

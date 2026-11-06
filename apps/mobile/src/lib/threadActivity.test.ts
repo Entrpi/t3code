@@ -856,7 +856,7 @@ describe("buildThreadFeed", () => {
     const feed = buildThreadFeed([
       projected(userMessage(), 0),
       projected(opening, 1),
-      projected(command(), 2),
+      projected({ ...command(), input: "git add -A && git commit -m wip" }, 2),
       projected(middle, 3),
       projected(assistantMessage(), 4),
     ]);
@@ -877,6 +877,7 @@ describe("buildThreadFeed", () => {
       type: "run-fold",
       createdAt: "2026-06-20T00:00:01.500Z",
       label: "Worked for 2s",
+      commitCount: 1,
     });
 
     const expanded = deriveThreadFeedPresentation(feed, latestRun, new Set([runId]));

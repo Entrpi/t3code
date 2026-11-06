@@ -2,7 +2,11 @@ import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
 import { WorkLogButton, WorkLogList, WorkLogRow } from "./WorkLog";
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
 import { type ToolActivityIcon } from "@t3tools/contracts";
-import { liveThoughtLine } from "@t3tools/client-runtime/work-log/presentation";
+import {
+  liveThoughtLine,
+  type WorkLogSummaryPart,
+  type WorkLogSummaryTone,
+} from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
 import { observeResize } from "~/lib/observeResize";
 import { tickTextContent } from "~/lib/tickTextContent";
@@ -589,6 +593,7 @@ export function WorkGroupToggleTimelineRow({
   return (
     <WorkGroupHeader
       label={row.summary}
+      parts={row.summaryParts}
       steps={row.steps}
       iconName={row.toolSurface ?? toolGroupSummaryIconName(row.summaryKind)}
       toolIcon={row.toolIcon}
@@ -601,8 +606,31 @@ export function WorkGroupToggleTimelineRow({
   );
 }
 
+const SUMMARY_TONE_CLASS_NAMES: Record<WorkLogSummaryTone, string> = {
+  "file-change": "text-info-foreground",
+  "file-delete": "text-diff-deletion-foreground",
+  commit: "text-commit-foreground",
+};
+
+function WorkGroupSummaryText(props: {
+  label: string;
+  parts?: ReadonlyArray<WorkLogSummaryPart> | undefined;
+}) {
+  if (props.parts === undefined) return props.label;
+  return props.parts.map((part) =>
+    part.tone === undefined ? (
+      part.text
+    ) : (
+      <span key={part.text} className={SUMMARY_TONE_CLASS_NAMES[part.tone]}>
+        {part.text}
+      </span>
+    ),
+  );
+}
+
 function WorkGroupHeader(props: {
   label: string;
+  parts?: ReadonlyArray<WorkLogSummaryPart> | undefined;
   steps?: number | undefined;
   iconName: WorkEntryIconName;
   toolIcon?: ToolActivityIcon | undefined;
@@ -631,13 +659,17 @@ function WorkGroupHeader(props: {
       label={
         stepsLabel ? (
           <span className="flex min-w-0 items-baseline gap-1.5">
-            <span className="truncate">{props.label}</span>
+            <span className="truncate">
+              <WorkGroupSummaryText label={props.label} parts={props.parts} />
+            </span>
             <span className="shrink-0 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
               · {stepsLabel}
             </span>
           </span>
         ) : (
-          <span className="block truncate">{props.label}</span>
+          <span className="block truncate">
+            <WorkGroupSummaryText label={props.label} parts={props.parts} />
+          </span>
         )
       }
       trailing={

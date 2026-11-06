@@ -3,7 +3,7 @@ import { type OrchestrationV2CheckpointFileTotals, type RunId } from "@t3tools/c
 import { type MouseEvent, type ReactNode, memo, useLayoutEffect, useRef, useState } from "react";
 import { type TurnDiffFileChange } from "../../types";
 import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree";
-import { ChevronRightIcon, FileDiffIcon } from "lucide-react";
+import { ChevronRightIcon, FileDiffIcon, GitCommitHorizontalIcon } from "lucide-react";
 import { ChevronsDownUp, ChevronsUpDown, Folder, FolderClosed } from "lucide";
 import { cn } from "~/lib/utils";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
@@ -25,11 +25,31 @@ interface ChangedFileRow {
 
 type ChangedFileContextMenuHandler = (filePath: string, event: MouseEvent) => void;
 
+function CommitBadge({ count }: { count: number }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-commit-foreground">
+      <GitCommitHorizontalIcon aria-hidden className="size-3" />
+      {count} {count === 1 ? "commit" : "commits"}
+    </span>
+  );
+}
+
+/** A turn that committed without leaving changed files still shows what it did. */
+export function TurnActivityCard({ commitCount }: { commitCount: number }) {
+  return (
+    <div className="mt-4 flex items-center gap-3 rounded-lg bg-secondary px-3 py-2 text-xs font-medium text-foreground dark:bg-input/20">
+      <span>Turn activity</span>
+      <CommitBadge count={commitCount} />
+    </div>
+  );
+}
+
 export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   runId: RunId;
   /** May be a prefix of the changed files; `totals` covers all of them. */
   files: ReadonlyArray<TurnDiffFileChange>;
   totals: OrchestrationV2CheckpointFileTotals;
+  commitCount?: number | undefined;
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
   onToggleAllDirectories: () => void;
@@ -40,6 +60,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
     runId,
     files,
     totals,
+    commitCount,
     allDirectoriesExpanded,
     resolvedTheme,
     onToggleAllDirectories,
@@ -71,6 +92,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
               className="text-xs leading-4"
             />
           )}
+          {commitCount ? <CommitBadge count={commitCount} /> : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {hasDirectories && (

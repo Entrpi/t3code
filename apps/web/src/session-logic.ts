@@ -33,6 +33,7 @@ import {
 } from "@t3tools/client-runtime/work-log/presentation";
 import type {
   WorkEntryCommandAction,
+  WorkEntryCommandEffects,
   WorkEntryFileAction,
 } from "@t3tools/client-runtime/work-log/file-actions";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
@@ -82,6 +83,7 @@ export interface WorkLogEntry {
   readonly changedFiles?: ReadonlyArray<string>;
   readonly fileAction?: WorkEntryFileAction | undefined;
   readonly commandAction?: WorkEntryCommandAction | undefined;
+  readonly commandEffects?: WorkEntryCommandEffects | undefined;
   readonly tone: "thinking" | "tool" | "info" | "error";
   readonly toolTitle?: string;
   readonly toolCallId?: string;

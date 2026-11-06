@@ -1,6 +1,6 @@
 import { flushSync } from "react-dom";
 import { AudioPreview } from "../files/AudioPreview";
-import { cdp, page } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 import {
   ComposerContextId,
   EnvironmentId,
@@ -15,6 +15,7 @@ import {
   ScheduledTaskId,
   ThreadId,
   type OrchestrationV2Subagent,
+  type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
@@ -209,6 +210,14 @@ async function click(element: HTMLElement) {
   await act(async () => element.click());
 }
 
+/** Rows mount after the list measures them, and folds keep their state across renders. */
+async function expand(screen: { button: (name: RegExp) => HTMLElement }, ...names: RegExp[]) {
+  for (const name of names) {
+    const disclosure = await vi.waitFor(() => screen.button(name));
+    if (disclosure.getAttribute("aria-expanded") !== "true") await click(disclosure);
+  }
+}
+
 function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }> } = {}) {
   environmentQuery.data = { tasks: scheduledTasks };
 }
@@ -217,6 +226,61 @@ const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
 
 describe("MessagesTimeline work rows", () => {
+  it("shows parsed file-action commands in the tooltip and expands them on row click", async () => {
+    setup();
+    const fixture = makeStreamingTimelineFixture();
+    const source = fixture.visibleTurnItems[4]!;
+    const commandRow = (id: string, input: string, position: number) => {
+      const item = {
+        ...source.item,
+        id: TurnItemId.make(id),
+        status: "completed",
+        title: null,
+        type: "command_execution",
+        input,
+        exitCode: 0,
+      } as OrchestrationV2TurnItem;
+      return { ...source, position, sourceItemId: item.id, item };
+    };
+    await using screen = await renderTimeline(
+      deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: [
+          commandRow("touch", "touch notes.md", 0),
+          commandRow("chain", "rm -f a.txt && touch b.txt && ls -l b.txt", 1),
+          commandRow("read", "sed -n '1,5p' app.ts", 2),
+        ],
+        optimisticMessages: [],
+      }),
+    );
+    await expand(screen, /^Worked for/, /^Created 2 files, deleted 1 file/);
+
+    const touch = await vi.waitFor(() => screen.button("Created notes.md"));
+    await userEvent.hover(touch);
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+        "touch notes.md",
+      ),
+    );
+    await click(touch);
+    expect(touch.getAttribute("aria-expanded")).toBe("true");
+    expect(touch.parentElement?.textContent).toContain("touch notes.md");
+
+    const chain = screen.button("Chained command with 1 file created, 1 file deleted");
+    await userEvent.hover(chain);
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+        "rm -f a.txt && touch b.txt && ls -l b.txt",
+      ),
+    );
+
+    await userEvent.hover(screen.button("Read app.ts lines 1-5"));
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+        "sed -n '1,5p' app.ts",
+      ),
+    );
+  });
+
   it("keeps the worked-for heading in place when expanded at the bottom", async () => {
     const props = baseProps();
     const runId = RunId.make("completed-run");

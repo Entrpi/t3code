@@ -11,13 +11,16 @@ import * as DateTime from "effect/DateTime";
 
 import {
   commandWorkAction,
+  commandWorkEffects,
   formatCommandActionLabel,
+  formatCommandEffectsLabel,
   formatFileActionLabel,
   presentWorkEntry,
   readTitleWithPath,
   settleFileActions,
   workItemFileActions,
   type WorkEntryCommandAction,
+  type WorkEntryCommandEffects,
   type WorkEntryFileAction,
 } from "./fileActions.ts";
 
@@ -146,6 +149,8 @@ describe("commandWorkAction", () => {
     ["rg -n useEffect apps/web", { kind: "search", query: "useEffect", path: "apps/web" }],
     ["ls -la src", { kind: "list", path: "src" }],
     ["tail -n 20 a.log", { kind: "read", paths: ["a.log"], lines: { last: 20 } }],
+    ["touch a.md && ls", { kind: "create", path: "a.md", exact: true }],
+    ["cat a.ts > b.ts", { kind: "write", path: "b.ts", exact: false }],
   ] as const)("names what a finished command did: %s", (input, action) => {
     expect(commandWorkAction(command("c", input))).toEqual(action);
   });
@@ -154,12 +159,83 @@ describe("commandWorkAction", () => {
     ["touch a.md", { status: "running" }],
     ["rm a.md", { exitCode: 1 }],
     ["rm a.md && touch b.md", {}],
+    ["touch a.md && vp test run", {}],
     ["git add . && git commit -m wip", {}],
     ["vp test run", {}],
   ] as const)(
     "keeps the command for running, failed, chained and other commands: %s",
     (input, fields) => {
       expect(commandWorkAction(command("c", input, fields))).toBeNull();
+    },
+  );
+});
+
+describe("commandWorkEffects", () => {
+  it.each([
+    [
+      "rm -f a.txt && rm -f b.txt && touch b.txt && ls -l b.txt",
+      {
+        files: [
+          { kind: "delete", path: "a.txt", exact: true },
+          { kind: "delete", path: "b.txt", exact: true },
+          { kind: "create", path: "b.txt", exact: true },
+        ],
+        commits: 0,
+        chained: true,
+      },
+      "Chained command with 1 file created, 2 files deleted",
+    ],
+    [
+      "printf x > a.md && sed -i '' s/x/y/ b.md; echo x >> c.md && mv d.md e.md",
+      {
+        files: [
+          { kind: "write", path: "a.md", exact: false },
+          { kind: "write", path: "c.md", exact: false },
+          { kind: "move", path: "e.md", fromPath: "d.md", exact: true },
+        ],
+        commits: 0,
+        chained: true,
+      },
+      "Chained command with 2 files written, 1 file moved",
+    ],
+    ["git add . && git commit -m test", { files: [], commits: 1, chained: true }, null],
+    [
+      "cd repo && touch notes.md && git -C . commit -am wip",
+      {
+        files: [{ kind: "create", path: "repo/notes.md", exact: true }],
+        commits: 1,
+        chained: true,
+      },
+      "Chained command with 1 file created and 1 commit",
+    ],
+    [
+      "rm a.md b.md",
+      {
+        files: [
+          { kind: "delete", path: "a.md", exact: true },
+          { kind: "delete", path: "b.md", exact: true },
+        ],
+        commits: 0,
+        chained: false,
+      },
+      "Deleted 2 files",
+    ],
+  ] as const)("finds every file action and commit in %s", (input, effects, label) => {
+    expect(commandWorkEffects(command("c", input))).toEqual(effects);
+    expect(formatCommandEffectsLabel(effects)).toBe(label);
+  });
+
+  it.each([
+    ["git add . && git commit -m wip", { status: "running" }],
+    ["git commit -m wip", { exitCode: 1 }],
+    ["touch a.md", {}],
+    ["cat a.md b.md", {}],
+    ["vp test run && ls", {}],
+    ["touch a.md && ls", {}],
+  ] as const)(
+    "has none for running, failed, single-action and other commands: %s",
+    (input, fields) => {
+      expect(commandWorkEffects(command("c", input, fields))).toBeNull();
     },
   );
 });
@@ -295,6 +371,26 @@ describe("settleFileActions", () => {
     expect(settled.get("w")).toMatchObject({ kind: "create", additions: 7, deletions: 0 });
   });
 
+  it("settles each file of a chained command under its own id", () => {
+    const settled = settleRun(
+      [command("chain", "printf x > notes.md && rm -f old.md && ls")],
+      [
+        checkpoint([
+          { path: "notes.md", kind: "added", additions: 1, deletions: 0 },
+          { path: "old.md", kind: "deleted", additions: 0, deletions: 2 },
+        ]),
+      ],
+    );
+    expect(settled.get("chain:0")).toEqual({
+      kind: "create",
+      path: "notes.md",
+      exact: false,
+      additions: 1,
+      deletions: 0,
+    });
+    expect(settled.get("chain:1")).toMatchObject({ kind: "delete", additions: 0, deletions: 2 });
+  });
+
   it("drops a shell delete when the checkpoint still lists the file", () => {
     // `rm -i` under a shell alias exits 0 and keeps the file.
     const kept = settleRun(
@@ -329,6 +425,7 @@ describe("presentWorkEntry", () => {
     readonly changedFiles?: ReadonlyArray<string>;
     readonly fileAction?: WorkEntryFileAction | undefined;
     readonly commandAction?: WorkEntryCommandAction | undefined;
+    readonly commandEffects?: WorkEntryCommandEffects | undefined;
   } => ({ id: item.id, label: "Changed 2 files", structuredPayload: item });
 
   it("gives a patch one row per file, with its run's settled kinds", () => {
@@ -359,8 +456,9 @@ describe("presentWorkEntry", () => {
     ).toBe(rows);
   });
 
-  it("names a command's read and leaves other commands as they are", () => {
+  it("names a command's read or effects and leaves other commands as they are", () => {
     const read = command("read", "sed -n '1,5p' a.ts");
+    const chain = command("chain", "rm -f a.md && git commit -m x");
     const build = command("build", "npm run build");
     const settle = settleFileActions(() => [], []);
 
@@ -368,6 +466,11 @@ describe("presentWorkEntry", () => {
       kind: "read",
       paths: ["a.ts"],
       lines: { start: 1, end: 5 },
+    });
+    expect(presentWorkEntry(entryFor(chain), settle)[0]?.commandEffects).toEqual({
+      files: [{ kind: "delete", path: "a.md", exact: true }],
+      commits: 1,
+      chained: true,
     });
     const entry = entryFor(build);
     expect(presentWorkEntry(entry, settle)).toEqual([entry]);
@@ -381,5 +484,14 @@ describe("presentWorkEntry", () => {
     );
     const entry = entryFor(remove);
     expect(presentWorkEntry(entry, settle)).toEqual([entry]);
+
+    const chain = command("chain", "printf x > notes.md && rm notes.md");
+    const settleChain = settleFileActions(
+      () => [chain],
+      [checkpoint([{ path: "notes.md", kind: "added", additions: 1, deletions: 0 }])],
+    );
+    expect(presentWorkEntry(entryFor(chain), settleChain)[0]?.commandEffects?.files).toEqual([
+      { kind: "create", path: "notes.md", exact: false },
+    ]);
   });
 });

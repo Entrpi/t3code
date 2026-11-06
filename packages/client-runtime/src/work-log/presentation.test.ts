@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import type { FileActionKind } from "./fileActions.ts";
+import type { FileActionKind, WorkEntryCommandEffects } from "./fileActions.ts";
 import {
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
@@ -242,6 +242,19 @@ describe("summarizeToolGroup", () => {
       command: "rg x",
       commandAction: { kind: "search", query: "x" },
     });
+  const effects = (
+    input: string,
+    commits: number,
+    files: ReadonlyArray<readonly [FileActionKind, string]> = [],
+  ) => {
+    const commandEffects: WorkEntryCommandEffects = {
+      files: files.map(([kind, path]) => ({ kind, path, exact: true })),
+      commits,
+      chained: true,
+    };
+    return entry({ itemType: "command_execution", command: input, commandEffects });
+  };
+  const commit = () => effects("git add . && git commit -m test", 1);
   const plan = () => entry({ itemType: "todo_list", tone: "info", label: "Tasks 1/3" });
   const thought = () => entry({ itemType: "reasoning", tone: "thinking", detail: "hmm" });
 
@@ -285,8 +298,40 @@ describe("summarizeToolGroup", () => {
       "Edited 1 file and used 1 tool",
       3,
     ],
+    [[commit()], "Made 1 commit", 1],
+    [[commit(), effects("git commit -m a && git commit -m b", 2)], "Made 3 commits", 2],
+    [
+      [
+        read("a.ts"),
+        effects("rm -f x && rm -f y && touch z && ls -l z", 0, [
+          ["delete", "x"],
+          ["delete", "y"],
+          ["create", "z"],
+        ]),
+        command("ls"),
+      ],
+      "Inspected 1 file, deleted 2 files, created 1 file, and ran 1 command",
+      3,
+    ],
   ] as const)("names every action in Compact: %#", (entries, summary, steps) => {
     expect(summarizeToolGroup(entries, "compact")).toMatchObject({ summary, steps });
+  });
+
+  it("tones file changes, deletions and commits so clients can highlight them", () => {
+    expect(
+      summarizeToolGroup(
+        [file("create", "a.ts"), file("delete", "b.ts"), commit(), command("ls")],
+        "compact",
+      ).parts,
+    ).toEqual([
+      { text: "Created 1 file", tone: "file-change" },
+      { text: ", " },
+      { text: "deleted 1 file", tone: "file-delete" },
+      { text: ", " },
+      { text: "made 1 commit", tone: "commit" },
+      { text: ", and " },
+      { text: "ran 1 command" },
+    ]);
   });
 
   it("keeps two categories in Standard, with file verbs and a named plan update", () => {
@@ -295,6 +340,9 @@ describe("summarizeToolGroup", () => {
     ).toBe("Created 1 file, ran 1 command, and performed 2 other actions");
     expect(summarizeToolGroup([plan(), read("b.ts")]).summary).toBe(
       "Updated the plan and read 1 file",
+    );
+    expect(summarizeToolGroup([read("a.ts"), read("b.ts"), commit(), command("ls")]).summary).toBe(
+      "Made 1 commit, ran 1 command, and performed 2 other actions",
     );
   });
 });

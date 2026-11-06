@@ -245,6 +245,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-diff-deletion: var(--diff-deletion);
   --color-diff-addition-foreground: var(--diff-addition-foreground);
   --color-diff-deletion-foreground: var(--diff-deletion-foreground);
+  --color-commit-foreground: var(--commit-foreground);
   --color-info-foreground: var(--info-foreground);
   --color-info: var(--info);
   --color-guest: var(--guest);
@@ -2275,6 +2276,7 @@ code {
   --diff-deletion: var(--destructive);
   --diff-addition-foreground: light-dark(var(--color-emerald-700), var(--color-emerald-400));
   --diff-deletion-foreground: light-dark(var(--color-red-700), var(--color-red-400));
+  --commit-foreground: light-dark(var(--color-violet-700), var(--color-violet-300));
 }
 
 /* Chat width setting. Comfortable keeps the default --chat-content-max-width,

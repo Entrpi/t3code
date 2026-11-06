@@ -9,10 +9,12 @@ import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRu
 import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
 import {
   formatCommandActionLabel,
+  formatCommandEffectsLabel,
   formatFileActionLabel,
   presentWorkEntry,
   readTitleWithPath,
   settleFileActions,
+  workItemCommitCount,
   type FileActionSettlement,
 } from "@t3tools/client-runtime/work-log/file-actions";
 import {
@@ -38,6 +40,7 @@ import {
   workGroupExpanded,
   type ToolGroupSummaryKind,
   type WorkLogDensity,
+  type WorkLogSummaryPart,
   type WorkLogPresentationEntry,
   type WorkLogToolLifecycleStatus,
 } from "@t3tools/client-runtime/work-log/presentation";
@@ -225,6 +228,8 @@ type ThreadFeedEntryContent =
       readonly steps?: number;
       readonly expanded: boolean;
       readonly summary: string;
+      /** Present when some part of a settled summary is highlighted; joins to `summary`. */
+      readonly summaryParts?: ReadonlyArray<WorkLogSummaryPart>;
       readonly summaryKind: ToolGroupSummaryKind;
       readonly toolSurface?: WorkLogPresentationEntry["toolSurface"];
       readonly toolIcon?: WorkLogPresentationEntry["toolIcon"];
@@ -241,6 +246,7 @@ type ThreadFeedEntryContent =
       readonly createdAt: string;
       readonly runId: RunId;
       readonly label: string;
+      readonly commitCount?: number;
       readonly expanded: boolean;
     }
   | {
@@ -280,6 +286,8 @@ export function workEntryRowLabel(
   if (entry.commandAction) {
     return compactWorkEntryText(formatCommandActionLabel(entry.commandAction, formatPath));
   }
+  const effectsLabel = entry.commandEffects && formatCommandEffectsLabel(entry.commandEffects);
+  if (effectsLabel) return effectsLabel;
   if (entry.command?.trim()) return compactWorkEntryText(commandDisplayText(entry.command));
   const action = toolGroupAction(entry);
   const isToolRead = action === "read" && entry.itemType === "dynamic_tool";
@@ -1043,6 +1051,7 @@ interface ThreadFeedRunFold {
   readonly createdAt: string;
   readonly hiddenEntryIds: ReadonlySet<string>;
   readonly label: string;
+  readonly commitCount?: number;
 }
 
 export function failedFeedRunIds(
@@ -1239,8 +1248,19 @@ function deriveThreadFeedRunFolds(
           )
         : [],
     );
+    const commitCount = group.entries.reduce(
+      (count, entry) =>
+        entry.type === "activity-group"
+          ? entry.activities.reduce(
+              (sum, activity) => sum + workItemCommitCount(activity.projectedItem.item),
+              count,
+            )
+          : count,
+      0,
+    );
     foldsByAnchorId.set(firstHiddenEntry.id, {
       ...(deferredWorkItemIds.length > 0 ? { deferredWorkItemIds } : {}),
+      ...(commitCount > 0 ? { commitCount } : {}),
       runId,
       createdAt: firstHiddenEntry.createdAt,
       hiddenEntryIds,
@@ -1575,6 +1595,7 @@ export function deriveThreadFeedPresentation(
         row.runId !== fold.runId ||
         row.createdAt !== fold.createdAt ||
         row.label !== fold.label ||
+        row.commitCount !== fold.commitCount ||
         row.expanded !== expanded ||
         row.deferredWorkItemIds?.join("|") !== fold.deferredWorkItemIds?.join("|")
       ) {
@@ -1585,6 +1606,7 @@ export function deriveThreadFeedPresentation(
           createdAt: fold.createdAt,
           runId: fold.runId,
           label: fold.label,
+          ...(fold.commitCount ? { commitCount: fold.commitCount } : {}),
           expanded,
         };
         runFoldRowsCache.set(entry, row);
@@ -1947,7 +1969,10 @@ function appendToolGroupRows(
           ...singleActivity,
           live: shimmer,
           groupStandIn:
-            !live && (singleActivity.workEntry.fileAction || singleActivity.workEntry.commandAction)
+            !live &&
+            (singleActivity.workEntry.fileAction ||
+              singleActivity.workEntry.commandAction ||
+              singleActivity.workEntry.commandEffects)
               ? { groupId }
               : { groupId, label: summary },
         },
@@ -1993,6 +2018,10 @@ function appendToolGroupRows(
       : {}),
     expanded,
     summary,
+    ...(summary === groupSummary.summary &&
+    groupSummary.parts.some((part) => part.tone !== undefined)
+      ? { summaryParts: groupSummary.parts }
+      : {}),
     summaryKind: toolGroupSummaryKind(
       (live ? [latestActivity] : activities).map((activity) => activity.workEntry),
     ),

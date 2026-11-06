@@ -10,7 +10,7 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
-import { ChangedFilesCard } from "./ChangedFilesTree";
+import { ChangedFilesCard, TurnActivityCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
 import { useAssistantMessageText, useProject, useThreadShell } from "../../state/entities";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -63,6 +63,7 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
         {ctx.onOpenTurnDiff ? (
           <AssistantChangedFilesSection
             turnSummary={row.assistantTurnDiffSummary}
+            commitCount={row.assistantCommitCount}
             routeThreadKey={ctx.routeThreadKey}
             resolvedTheme={ctx.resolvedTheme}
             onOpenTurnDiff={ctx.onOpenTurnDiff}
@@ -296,23 +297,27 @@ export function McpAppTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
  *  so toggling re-renders only this component — not the entire list. */
 const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection({
   turnSummary,
+  commitCount,
   routeThreadKey,
   resolvedTheme,
   onOpenTurnDiff,
 }: {
   turnSummary: TurnDiffSummary | undefined;
+  commitCount: number | undefined;
   routeThreadKey: string;
   resolvedTheme: "light" | "dark";
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
 }) {
-  if (!turnSummary) return null;
-  const checkpointFiles = turnSummary.files;
-  if (checkpointFiles.length === 0) return null;
+  const checkpointFiles = turnSummary?.files ?? [];
+  if (!turnSummary || checkpointFiles.length === 0) {
+    return commitCount ? <TurnActivityCard commitCount={commitCount} /> : null;
+  }
 
   return (
     <AssistantChangedFilesSectionInner
       turnSummary={turnSummary}
+      commitCount={commitCount}
       checkpointFiles={checkpointFiles}
       routeThreadKey={routeThreadKey}
       resolvedTheme={resolvedTheme}
@@ -323,12 +328,14 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
 
 function AssistantChangedFilesSectionInner({
   turnSummary,
+  commitCount,
   checkpointFiles,
   routeThreadKey,
   resolvedTheme,
   onOpenTurnDiff,
 }: {
   turnSummary: TurnDiffSummary;
+  commitCount: number | undefined;
   checkpointFiles: TurnDiffSummary["files"];
   routeThreadKey: string;
   resolvedTheme: "light" | "dark";
@@ -355,6 +362,7 @@ function AssistantChangedFilesSectionInner({
       runId={turnSummary.runId}
       files={checkpointFiles}
       totals={checkpointFileTotals(turnSummary)}
+      commitCount={commitCount}
       allDirectoriesExpanded={allDirectoriesExpanded}
       resolvedTheme={resolvedTheme}
       onToggleAllDirectories={() =>
