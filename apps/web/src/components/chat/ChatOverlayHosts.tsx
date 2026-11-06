@@ -193,8 +193,11 @@ export function openRevertConfirm(threadKey: string, pending: PendingRevert): vo
 export function RevertConfirmHost(props: {
   readonly threadKey: string;
   readonly onConfirm: (turnCount: number, messageId: MessageId, restoreFiles: boolean) => void;
+  /** What rewinding the latest prompt cannot undo; null for an earlier prompt. */
+  readonly latestPromptEffects: (messageId: MessageId) => ReadonlyArray<string> | null;
 }) {
   const pending = useThreadOverlay(revertConfirmAtom, props.threadKey);
+  const effects = pending === null ? null : props.latestPromptEffects(pending.messageId);
   const confirm = (restoreFiles: boolean) => {
     if (pending === null) return;
     closeThreadOverlay(revertConfirmAtom);
@@ -209,11 +212,23 @@ export function RevertConfirmHost(props: {
     >
       <AlertDialogPopup>
         <AlertDialogHeader>
-          <AlertDialogTitle>Edit from here?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {effects === null ? "Edit from here?" : "Revert this prompt?"}
+          </AlertDialogTitle>
           <AlertDialogDescription>
             Rewind chat to before this message. Your prompt and attachments return to the composer.
             “Revert files too” also undoes your own edits.
           </AlertDialogDescription>
+          {effects !== null && effects.length > 0 ? (
+            <div className="text-sm">
+              <p className="font-medium">A rewind may not undo everything this turn did:</p>
+              <ul className="mt-1 list-disc ps-5 text-muted-foreground">
+                {effects.map((effect) => (
+                  <li key={effect}>{effect}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>

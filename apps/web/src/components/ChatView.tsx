@@ -90,6 +90,7 @@ import {
   getUserQueuedThreadRuns,
   threadSupportsProviderHandoff,
 } from "@t3tools/client-runtime/state/thread-workflows";
+import { rewindLastingEffects } from "@t3tools/client-runtime/state/rewind-effects";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import {
@@ -1701,6 +1702,16 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  // Only the latest exchange's items are always loaded, so only its rewind lists what stays.
+  const latestPromptEffects = (messageId: MessageId) => {
+    const latest = serverProjection?.messages.findLast((message) => message.role === "user");
+    if (latest === undefined || latest.id !== messageId || latest.runId === null) return null;
+    return rewindLastingEffects(
+      (serverProjection?.turnItems ?? []).filter((item) => item.runId === latest.runId),
+      activeWorkspaceRoot ?? null,
+    );
+  };
+  const latestPromptEffectsStable = useStableCallback(latestPromptEffects);
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   const liveIsGitRepo = gitStatusQuery.data?.isRepo;
@@ -4010,7 +4021,11 @@ export default function ChatView(props: ChatViewProps) {
         </ChatRightPanel>
       ) : null}
 
-      <RevertConfirmHost threadKey={routeThreadKey} onConfirm={onConfirmRevertStable} />
+      <RevertConfirmHost
+        threadKey={routeThreadKey}
+        onConfirm={onConfirmRevertStable}
+        latestPromptEffects={latestPromptEffectsStable}
+      />
       {embedded ? null : <LinkPullRequestDialogHost />}
       <ThreadVisitWatermark threadRef={routeThreadRef} />
       <ExpandedImageDialogHost threadKey={routeThreadKey} />

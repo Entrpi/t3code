@@ -165,6 +165,11 @@ with its close button, or add files by pasting, dropping, or choosing **Attach f
 Press `Esc` to cancel. Workspace files stay as they are. If the rewind or the send fails,
 your edit waits at the front of the queue, paused, where you can edit, send, or remove it.
 
+Choose **Revert** beside **Edit** to rewind to before your latest prompt without sending
+anything. It works like **Edit from here**, below. Before you confirm, it lists what that
+turn did that a rewind can't undo, such as commits, pushes, package installs, files changed
+outside the project, and threads it started.
+
 Choose **Edit from here** beneath an earlier message to rewind the conversation to
 before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to put the workspace back
@@ -176,7 +181,7 @@ restoring would erase their changes. A thread that works in the project director
 rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
 resending. Any unsent draft stays above the restored prompt.
 
-**Edit**, **Edit from here**, and **Fork from this response** appear once the latest turn
+**Edit**, **Revert**, **Edit from here**, and **Fork from this response** appear once the latest turn
 has fully finished, including background work and any approval or question it waits on.
 
 This removes the selected message and later conversation from the active thread

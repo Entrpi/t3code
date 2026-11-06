@@ -195,6 +195,10 @@
       "types": "./src/state/commandOutput.ts",
       "default": "./src/state/commandOutput.ts"
     },
+    "./state/rewind-effects": {
+      "types": "./src/state/rewindEffects.ts",
+      "default": "./src/state/rewindEffects.ts"
+    },
     "./state/item-support": {
       "types": "./src/state/itemSupport.ts",
       "default": "./src/state/itemSupport.ts"

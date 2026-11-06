@@ -38,6 +38,7 @@ import {
   MessagesSquareIcon,
   Redo2Icon,
   PencilIcon,
+  Undo2Icon,
 } from "lucide-react";
 import { Link as LinkIconNode } from "lucide";
 import { Button, ButtonRevealLabel, InlineButton } from "../ui/button";
@@ -813,7 +814,14 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       </Tooltip>
       <div className={cn("flex items-center gap-0.5", floatActions && "flex-wrap justify-end")}>
         {inlineEditTurnCount !== undefined ? (
-          <EditUserMessageButton onEdit={() => setEditing(true)} />
+          <>
+            <EditUserMessageButton onEdit={() => setEditing(true)} />
+            <RevertUserMessageButton
+              turnCount={inlineEditTurnCount}
+              messageId={row.message.id}
+              latest
+            />
+          </>
         ) : typeof revertTurnCount === "number" ? (
           <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
         ) : null}
@@ -1141,9 +1149,12 @@ function EditUserMessageButton({ onEdit }: { onEdit: () => void }) {
 function RevertUserMessageButton({
   turnCount,
   messageId,
+  latest = false,
 }: {
   turnCount: number;
   messageId: MessageId;
+  /** The latest prompt has inline Edit, so this only rewinds. */
+  latest?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
@@ -1159,14 +1170,18 @@ function RevertUserMessageButton({
             variant="ghost"
             disabled={activity.isRevertingCheckpoint}
             onClick={() => ctx.onRevertToTurnCount(turnCount, messageId)}
-            aria-label="Edit from here"
+            aria-label={latest ? "Revert" : "Edit from here"}
           />
         }
       >
-        <PencilIcon className="size-3" />
-        <ButtonRevealLabel>Edit from here</ButtonRevealLabel>
+        {latest ? <Undo2Icon className="size-3" /> : <PencilIcon className="size-3" />}
+        <ButtonRevealLabel>{latest ? "Revert" : "Edit from here"}</ButtonRevealLabel>
       </TooltipTrigger>
-      <TooltipPopup side="top">Rewind to before this prompt</TooltipPopup>
+      <TooltipPopup side="top">
+        {latest
+          ? "Rewind to before this prompt without sending it again"
+          : "Rewind to before this prompt"}
+      </TooltipPopup>
     </Tooltip>
   );
 }
