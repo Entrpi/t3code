@@ -91,6 +91,17 @@ describe("rewindLastingEffects", () => {
       ["Changes to files outside the project: /tmp/notes.md"],
     ],
     [
+      [
+        patch(["src/a.ts", "../sibling.ts"]),
+        command("echo x > ../other/x.txt && touch src/../b.ts"),
+        command("touch ../../packages/lib/b.ts && cd .. && ls"),
+      ],
+      [
+        "Changes to files outside the project: /sibling.ts",
+        "3 commands the app can't check: echo x > ../other/x.txt, touch ../../packages/lib/b.ts, cd ..",
+      ],
+    ],
+    [
       [tool("mcp__github__create_issue"), tool("mcp__t3-code__t3_thread_read"), tool("Read")],
       ["Tool calls that may have acted outside this thread: create_issue"],
     ],

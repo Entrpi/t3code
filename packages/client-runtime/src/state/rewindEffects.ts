@@ -50,7 +50,7 @@ function displaySegment(segment: string): string {
 
 function writesOutside(path: string, workspaceRoot: string | null): boolean {
   if (STREAM_PATHS.has(path)) return false;
-  return path.startsWith("~") || isOutside(path, workspaceRoot);
+  return path.startsWith("~") || outsidePath(path, workspaceRoot) !== null;
 }
 
 /** A command segment whose effects this check knows: a read, a check or build, or a file change inside the project. */
@@ -89,10 +89,17 @@ function listed(names: ReadonlyArray<string>): string {
   return names.length > 3 ? `${shown} and ${names.length - 3} more` : shown;
 }
 
-function isOutside(path: string, workspaceRoot: string | null): boolean {
-  if (workspaceRoot === null || !path.startsWith("/")) return false;
+/** Where a write outside the project lands; a relative path is taken from the project root. */
+function outsidePath(path: string, workspaceRoot: string | null): string | null {
+  if (workspaceRoot === null || !workspaceRoot.startsWith("/")) return null;
   const root = workspaceRoot.replace(/\/+$/, "");
-  return path !== root && !path.startsWith(`${root}/`);
+  const segments: string[] = [];
+  for (const segment of (path.startsWith("/") ? path : `${root}/${path}`).split("/")) {
+    if (segment === "..") segments.pop();
+    else if (segment !== "" && segment !== ".") segments.push(segment);
+  }
+  const resolved = `/${segments.join("/")}`;
+  return resolved === root || resolved.startsWith(`${root}/`) ? null : resolved;
 }
 
 /**
@@ -135,7 +142,10 @@ export function rewindLastingEffects(
       case "file_change": {
         if (item.status === "failed" || item.status === "cancelled") break;
         const paths = item.changes?.map((change) => change.path) ?? [item.fileName];
-        for (const path of paths) if (isOutside(path, workspaceRoot)) outside.add(path);
+        for (const path of paths) {
+          const resolved = outsidePath(path, workspaceRoot);
+          if (resolved !== null) outside.add(resolved);
+        }
         break;
       }
       case "thread_created":
