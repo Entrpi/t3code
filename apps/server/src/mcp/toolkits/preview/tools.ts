@@ -96,7 +96,7 @@ const PreviewDialogTool = browserTool(
 const PreviewNavigateTool = safeBrowserTool(
   Tool.make("preview_navigate", {
     description:
-      "Navigate the chosen tab. Pass `url` for a website, or `target:{kind:'environment-port',port}` for a dev server. Exactly one of `url` and `target`.",
+      "Navigate the chosen tab. Pass `url` for a website, `target:{kind:'environment-port',port}` for a dev server, or `action` to go back, forward, reload, or hardReload. Exactly one of `url`, `target`, and `action`.",
     parameters: PreviewAutomationNavigateInput,
     success: PreviewAutomationStatus,
     failure: PreviewToolFailure,

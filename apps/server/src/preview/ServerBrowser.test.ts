@@ -101,6 +101,10 @@ function makeSession(
   const events = new NodeEvents.EventEmitter();
   return {
     on: vi.fn((name: string, callback: (...args: unknown[]) => void) => events.on(name, callback)),
+    off: vi.fn((name: string, callback: (...args: unknown[]) => void) =>
+      events.off(name, callback),
+    ),
+    listenerCount: (name: string) => events.listenerCount(name),
     emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
     emitAsync: (name: string, ...args: unknown[]) =>
       Promise.all(events.listeners(name).map((listener) => listener(...args))),
@@ -206,8 +210,9 @@ function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "
       initialNavigation = null;
       await pending?.();
     }),
-    goBack: vi.fn(async () => {}),
-    goForward: vi.fn(async () => {}),
+    // Playwright answers null when a history step loads no new document.
+    goBack: vi.fn(async (): Promise<unknown> => null),
+    goForward: vi.fn(async (): Promise<unknown> => null),
     reload: vi.fn(async () => {}),
     emulateMedia: vi.fn(async () => {}),
     waitForLoadState: vi.fn(async () => {}),
@@ -700,6 +705,200 @@ it.live.each([
       yield* Fiber.join(correction);
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+const pageUrl = "http://localhost:5173/";
+const historyAt = (currentIndex: number) => async () => ({
+  currentIndex,
+  entries: ["a", "b", "c"].map((name, id) => ({ id, url: `${pageUrl}${name}` })),
+});
+const committedFrame = (frame: Record<string, unknown>) => ({
+  frame: { id: "main", loaderId: "next", url: pageUrl, ...frame },
+});
+/** A hard reload must not finish on a child frame's commit and the old document's load. */
+const emitStaleEvents = (cdp: ReturnType<typeof makeSession>) => {
+  cdp.emit("Page.frameNavigated", committedFrame({ id: "child", parentId: "main" }));
+  cdp.emit("Page.loadEventFired", { timestamp: 1 });
+};
+const hardReloadSent = [["Page.reload", { ignoreCache: true }]];
+it.effect.each<{
+  readonly case: string;
+  readonly action: "back" | "forward" | "reload" | "hardReload";
+  readonly answers?: Record<
+    string,
+    (
+      cdp: ReturnType<typeof makeSession>,
+      page: ReturnType<typeof makeContext>["page"],
+    ) => Promise<unknown>
+  >;
+  /** The page shows Chromium's error page after its server went away. */
+  readonly errorPage?: boolean;
+  /** The call's deadline passes once the browser has been asked. */
+  readonly expires?: boolean;
+  readonly goBackCalls?: number;
+  readonly reloads?: ReadonlyArray<unknown>;
+  readonly outcome: Record<string, unknown>;
+}>([
+  {
+    case: "with no earlier entry",
+    action: "back",
+    outcome: { error: { reason: "This tab has no earlier page to go back to." } },
+  },
+  {
+    case: "with no later entry",
+    action: "forward",
+    answers: { "Page.getNavigationHistory": historyAt(2) },
+    outcome: { error: { reason: "This tab has no later page to go forward to." } },
+  },
+  {
+    case: "into a same-document entry",
+    action: "back",
+    answers: { "Page.getNavigationHistory": historyAt(1) },
+    goBackCalls: 1,
+    outcome: { status: { url: pageUrl } },
+  },
+  {
+    case: "when the history lookup never answers",
+    action: "back",
+    answers: { "Page.getNavigationHistory": () => new Promise(() => {}) },
+    expires: true,
+    outcome: {
+      error: {
+        _tag: "PreviewAutomationTimeoutError",
+        timeoutMs: 300,
+        reason: "The browser did not answer a history lookup within 300ms.",
+      },
+    },
+  },
+  {
+    case: "after a new document loads",
+    action: "hardReload",
+    answers: {
+      "Page.reload": async (cdp) => {
+        emitStaleEvents(cdp);
+        cdp.emit("Page.frameNavigated", committedFrame({}));
+        cdp.emit("Page.loadEventFired", { timestamp: 2 });
+        return {};
+      },
+    },
+    reloads: hardReloadSent,
+    outcome: { status: { url: pageUrl } },
+  },
+  {
+    case: "when the new document never loads",
+    action: "hardReload",
+    answers: {
+      "Page.reload": async (cdp) => {
+        emitStaleEvents(cdp);
+        cdp.emit("Page.frameNavigated", committedFrame({}));
+        return {};
+      },
+    },
+    reloads: hardReloadSent,
+    expires: true,
+    outcome: {
+      error: {
+        _tag: "PreviewAutomationTimeoutError",
+        timeoutMs: 300,
+        reason: "The hard reload did not finish within 300ms.",
+      },
+    },
+  },
+  {
+    case: "when the reload command fails",
+    action: "hardReload",
+    answers: { "Page.reload": () => Promise.reject(new Error("Target closed")) },
+    reloads: hardReloadSent,
+    outcome: { error: { _tag: "PreviewAutomationExecutionError", reason: "Target closed" } },
+  },
+  {
+    case: "onto an error page",
+    action: "hardReload",
+    answers: {
+      "Page.reload": async (cdp) => {
+        cdp.emit("Page.frameNavigated", committedFrame({ unreachableUrl: pageUrl }));
+        return {};
+      },
+    },
+    reloads: hardReloadSent,
+    outcome: { error: { reason: `Navigation to ${pageUrl} failed.` } },
+  },
+  {
+    case: "when the tab closes",
+    action: "hardReload",
+    answers: {
+      "Page.reload": async (_cdp, page) => {
+        await page.close();
+        return {};
+      },
+    },
+    reloads: hardReloadSent,
+    outcome: { error: { reason: "The preview tab closed." } },
+  },
+  {
+    case: "from an error page",
+    action: "reload",
+    answers: { "Page.getNavigationHistory": historyAt(1) },
+    errorPage: true,
+    outcome: { error: { reason: `Navigation to ${pageUrl}b failed: ERR_CONNECTION_REFUSED` } },
+  },
+])(
+  "an agent's $action moves through the tab's history $case",
+  ({ action, answers = {}, errorPage, expires, goBackCalls = 0, reloads = [], outcome }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { broker, tabId } = yield* ready;
+        yield* broker.invoke({ scope, tabId, operation: "navigate", input: { url: pageUrl } });
+        const page = contexts[0]!.page;
+        const cdp = contexts[0]!.sessions[0]!;
+        const send = cdp.send.getMockImplementation()!;
+        const asked = Promise.withResolvers<void>();
+        cdp.send.mockImplementation(async (method, input) => {
+          const answer = answers[method];
+          if (!answer) return send(method, input);
+          asked.resolve();
+          return answer(cdp, page) as Promise<Record<string, unknown>>;
+        });
+        if (errorPage) {
+          yield* Effect.promise(() => page.goto("chrome-error://chromewebdata/"));
+          page.reload.mockRejectedValueOnce(new Error("page.reload: net::ERR_CONNECTION_REFUSED"));
+        }
+        const listeners = () =>
+          ["Page.frameNavigated", "Page.loadEventFired"].map(cdp.listenerCount);
+        const before = listeners();
+        // Only the call's own deadlines are faked; Effect schedules with setImmediate.
+        yield* Effect.acquireRelease(
+          Effect.sync(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })),
+          () => Effect.sync(() => vi.useRealTimers()),
+        );
+
+        const navigation = yield* broker
+          .invoke<PreviewAutomationStatus>({
+            scope,
+            tabId,
+            operation: "navigate",
+            input: { action, timeoutMs: 300 },
+          })
+          .pipe(
+            Effect.match({
+              onFailure: (error) => ({ error }),
+              onSuccess: (status) => ({ status }),
+            }),
+            Effect.forkScoped,
+          );
+        if (expires) {
+          yield* Effect.promise(() => asked.promise);
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(300));
+        }
+        const result = yield* Fiber.join(navigation);
+
+        expect(result).toMatchObject(outcome);
+        expect(page.goBack).toHaveBeenCalledTimes(goBackCalls);
+        expect(page.goForward).not.toHaveBeenCalled();
+        expect(cdp.send.mock.calls.filter(([method]) => method === "Page.reload")).toEqual(reloads);
+        expect(listeners()).toEqual(before);
+      }),
+    ).pipe(Effect.provide(layer)),
 );
 
 // The fake encoder decodes every frame at 1280x800, so 30 fps hits the bitrate floor.

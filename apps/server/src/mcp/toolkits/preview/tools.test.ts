@@ -51,3 +51,10 @@ it("preview_open accepts a target while preserving open input constraints", () =
   expect(() => decode({ target: { ...target, port: 0 } })).toThrow();
   expect(() => decode({ target, tabId: "tab-1", reuseExistingTab: false })).toThrow();
 });
+
+it("preview_navigate takes exactly one of url, target, and action", () => {
+  const decode = Schema.decodeUnknownSync(PreviewToolkit.tools.preview_navigate.parametersSchema);
+  expect(decode({ action: "back" })).toEqual({ action: "back" });
+  expect(() => decode({ action: "reload", url: "https://example.com" })).toThrow();
+  expect(() => decode({})).toThrow();
+});

@@ -467,6 +467,142 @@ const CLIPBOARD_SCRIPT = `(() => {
   };
 })();`;
 
+type NavigationWaitUntil = "load" | "domcontentloaded" | "commit";
+type NavigationRequest =
+  | { readonly url: string }
+  | { readonly action: NonNullable<PreviewAutomationNavigateInput["action"]> };
+
+// The broker shows a server browser timeout's `detail`, not its message.
+const timedOut = (reason: string, timeoutMs: number) =>
+  new ServerBrowserPage.ServerBrowserOperationError({
+    tag: "PreviewAutomationTimeoutError",
+    message: reason,
+    detail: { reason, timeoutMs },
+  });
+
+// Raw CDP sends have no timeout, and a stalled one would hold the tab's control queue.
+const within = <A>(work: Promise<A>, deadline: number, onExpiry: () => Error) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(onExpiry()), Math.max(0, deadline - Date.now()));
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
+
+// Playwright's reload cannot bypass the cache. Page.frameNavigated fires only for a new
+// document, so a pushState during the reload cannot end the wait early.
+const hardReload = (
+  tab: ServerTab,
+  waitUntil: NavigationWaitUntil,
+  deadline: number,
+  timeout: number,
+) => {
+  const ready =
+    waitUntil === "load"
+      ? "Page.loadEventFired"
+      : waitUntil === "domcontentloaded"
+        ? "Page.domContentEventFired"
+        : null;
+  return new Promise<void>((resolve, reject) => {
+    let committed = false;
+    const timer = setTimeout(
+      () => fail(timedOut(`The hard reload did not finish within ${timeout}ms.`, timeout)),
+      Math.max(0, deadline - Date.now()),
+    );
+    const cleanup = () => {
+      clearTimeout(timer);
+      tab.cdp.off("Page.frameNavigated", onNavigated);
+      if (ready) tab.cdp.off(ready, onReady);
+      tab.page.off("close", onClose);
+      tab.page.off("crash", onCrash);
+    };
+    const fail = (error: unknown) => {
+      cleanup();
+      reject(error);
+    };
+    const succeed = () => {
+      cleanup();
+      resolve();
+    };
+    const onNavigated = ({
+      frame,
+    }: {
+      readonly frame: { readonly parentId?: string; readonly unreachableUrl?: string };
+    }) => {
+      if (frame.parentId !== undefined) return;
+      if (frame.unreachableUrl !== undefined) {
+        fail(
+          new ServerBrowserPage.ServerBrowserOperationError({
+            tag: "PreviewAutomationExecutionError",
+            message: `Navigation to ${frame.unreachableUrl} failed.`,
+          }),
+        );
+        return;
+      }
+      committed = true;
+      if (!ready) succeed();
+    };
+    const onReady = () => {
+      if (committed) succeed();
+    };
+    const ended = (message: string) => () =>
+      fail(
+        new ServerBrowserPage.ServerBrowserOperationError({
+          tag: "PreviewAutomationExecutionError",
+          message,
+        }),
+      );
+    const onClose = ended("The preview tab closed.");
+    const onCrash = ended("The preview tab crashed.");
+    tab.cdp.on("Page.frameNavigated", onNavigated);
+    if (ready) tab.cdp.on(ready, onReady);
+    tab.page.on("close", onClose);
+    tab.page.on("crash", onCrash);
+    tab.cdp.send("Page.reload", { ignoreCache: true }).catch(fail);
+  });
+};
+
+const startNavigation = async (
+  tab: ServerTab,
+  to: NavigationRequest,
+  waitUntil: NavigationWaitUntil,
+  timeout: number,
+) => {
+  if ("url" in to)
+    return { url: to.url, navigation: tab.page.goto(to.url, { waitUntil, timeout }) };
+  // The history entry keeps the real URL while the page shows Chromium's error page.
+  const deadline = Date.now() + timeout;
+  const { currentIndex, entries } = await within(
+    tab.cdp.send("Page.getNavigationHistory"),
+    deadline,
+    () => timedOut(`The browser did not answer a history lookup within ${timeout}ms.`, timeout),
+  );
+  const step = to.action === "back" ? -1 : to.action === "forward" ? 1 : 0;
+  const entry = entries[currentIndex + step];
+  if (!entry && step !== 0)
+    throw new ServerBrowserPage.ServerBrowserOperationError({
+      tag: "PreviewAutomationExecutionError",
+      message:
+        step < 0
+          ? "This tab has no earlier page to go back to."
+          : "This tab has no later page to go forward to.",
+    });
+  const url = entry?.url ?? tab.page.url();
+  const options = { waitUntil, timeout: Math.max(1, deadline - Date.now()) };
+  switch (to.action) {
+    case "back":
+      return { url, navigation: tab.page.goBack(options) };
+    case "forward":
+      return { url, navigation: tab.page.goForward(options) };
+    case "reload":
+      return { url, navigation: tab.page.reload(options) };
+    case "hardReload":
+      return { url, navigation: hardReload(tab, waitUntil, deadline, timeout) };
+  }
+};
+
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
@@ -1675,19 +1811,20 @@ const make = Effect.gen(function* () {
 
   const navigate = async (
     tab: ServerTab,
-    url: string,
+    to: NavigationRequest,
     readiness: "load" | "domContentLoaded" | "none",
     timeout: number,
   ) => {
-    const navigation = tab.page.goto(url, {
+    const { url, navigation } = await startNavigation(
+      tab,
+      to,
+      readiness === "domContentLoaded"
+        ? "domcontentloaded"
+        : readiness === "none"
+          ? "commit"
+          : "load",
       timeout,
-      waitUntil:
-        readiness === "domContentLoaded"
-          ? "domcontentloaded"
-          : readiness === "none"
-            ? "commit"
-            : "load",
-    });
+    );
     if (readiness === "none") {
       tab.control.track(navigation);
       return;
@@ -2065,7 +2202,7 @@ const make = Effect.gen(function* () {
                 reason: "dialogPending",
               });
             if (existing) {
-              if (url) await navigate(tab, url, "load", navigationTimeout);
+              if (url) await navigate(tab, { url }, "load", navigationTimeout);
             } else {
               // A failed open returns no tabId; a leftover hidden tab would block later reuse.
               await tab.initialNavigation?.catch(async (cause: unknown) => {
@@ -2207,10 +2344,12 @@ const make = Effect.gen(function* () {
     switch (request.operation) {
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
-        await recordAction(tab, "navigate", () =>
+        await recordAction(tab, navigateInput.action ?? "navigate", () =>
           navigate(
             tab,
-            resolveNavigationUrl(navigateInput),
+            navigateInput.action
+              ? { action: navigateInput.action }
+              : { url: resolveNavigationUrl(navigateInput) },
             navigateInput.readiness ?? "load",
             navigateInput.timeoutMs ?? request.timeoutMs,
           ),

@@ -200,6 +200,9 @@ export const PreviewAutomationNavigateInput = Schema.Struct({
     description: `Website URL. ${URL_GUIDANCE} For public pages.`,
   }),
   target: Schema.optional(BrowserNavigationTarget),
+  action: Schema.optional(Schema.Literals(["back", "forward", "reload", "hardReload"])).annotate({
+    description: "'hardReload' reloads without the browser cache.",
+  }),
   readiness: Schema.optional(Schema.Literals(["load", "domContentLoaded", "none"])).annotate({
     description: "Default 'load'. 'none': return at once.",
   }),
@@ -207,8 +210,10 @@ export const PreviewAutomationNavigateInput = Schema.Struct({
 }).check(
   Schema.makeFilter(
     (input) =>
-      Number(input.url !== undefined) + Number(input.target !== undefined) === 1 ||
-      "Provide exactly one of url or target.",
+      Number(input.url !== undefined) +
+        Number(input.target !== undefined) +
+        Number(input.action !== undefined) ===
+        1 || "Provide exactly one of url, target, or action.",
   ),
 );
 export type PreviewAutomationNavigateInput = typeof PreviewAutomationNavigateInput.Type;
