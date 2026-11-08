@@ -199,7 +199,7 @@ it.effect("only a trusted touch restores an expired token with its original scop
 );
 
 it.effect.each(["provider-session", "thread", "all"] as const)(
-  "never restores an expired token after %s revocation",
+  "an expired token stays issued until %s revocation and never comes back",
   (revocation) =>
     Effect.gen(function* () {
       let timestamp = 1_000;
@@ -213,11 +213,13 @@ it.effect.each(["provider-session", "thread", "all"] as const)(
       const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
 
       timestamp += 101;
+      expect(registry.isIssued(issued.config.providerSessionId)).toBe(true);
       yield* {
         "provider-session": registry.revokeProviderSession(issued.config.providerSessionId),
         thread: registry.revokeThread(threadId),
         all: registry.revokeAll,
       }[revocation];
+      expect(registry.isIssued(issued.config.providerSessionId)).toBe(false);
       yield* registry.touch(threadId);
       expect(yield* registry.resolve(token)).toBeUndefined();
     }),

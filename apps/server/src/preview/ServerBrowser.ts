@@ -77,6 +77,7 @@ import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
@@ -475,6 +476,7 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
+  const mcpSessions = yield* McpSessionRegistry.McpSessionRegistry;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -795,6 +797,11 @@ const make = Effect.gen(function* () {
     }
   };
 
+  const agentSessionEnded = (agentSessionId: string) => {
+    const credential = PreviewAutomationBroker.agentSessionCredential(agentSessionId);
+    return credential !== undefined && !mcpSessions.isIssued(credential);
+  };
+
   const createTab = async (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
     const opened: Array<() => Promise<void>> = [];
     try {
@@ -850,8 +857,10 @@ const make = Effect.gen(function* () {
     if (!desktop) await recordCopies(cdp);
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-    const control = new SessionControl(snapshot.automationOwner ?? null, () =>
-      ServerBrowserPage.invalidateRefs(page),
+    const control = new SessionControl(
+      snapshot.automationOwner ?? null,
+      () => ServerBrowserPage.invalidateRefs(page),
+      agentSessionEnded,
     );
     let pendingFileChooserOffer = Promise.resolve();
     const tab: ServerTab = {
@@ -1520,7 +1529,7 @@ const make = Effect.gen(function* () {
   const tabOwner = (tab: ServerTab) =>
     tab.control.controller !== null
       ? ("human" as const)
-      : tab.control.agentId !== null
+      : tab.control.agentId !== null && !tab.control.agentEnded
         ? ("agent" as const)
         : ("unclaimed" as const);
 
@@ -2026,9 +2035,12 @@ const make = Effect.gen(function* () {
               : "The requested server preview tab does not exist.",
           });
         }
-        // Reusing another session's tab requires explicit tabId; reading it grants no implicit takeover.
+        // Reusing a live session's or a user's tab requires an explicit tabId; reading it grants no implicit takeover.
         const existing =
-          found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
+          found &&
+          (request.tabIdExplicit ||
+            found.control.agentId === request.agentSessionId ||
+            found.control.agentEnded)
             ? found
             : undefined;
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
@@ -2137,7 +2149,7 @@ const make = Effect.gen(function* () {
     const tab = await requireTab(request);
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
-      if (tab.control.agentId !== request.agentSessionId)
+      if (tab.control.agentId !== request.agentSessionId && !tab.control.agentEnded)
         throw new BrowserControlInterrupted({
           message: "Only the agent session that opened this tab can close it.",
           reason: "agentMismatch",

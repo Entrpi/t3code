@@ -166,6 +166,12 @@ const selectorDiagnosticsFromInput = (
 const hostAssignmentKey = (scope: McpInvocationContext.McpThreadInvocationScope): string =>
   `${scope.environmentId}\u0000${scope.thread.providerSessionId}\u0000${scope.thread.threadId}`;
 
+/** The credential in a `hostAssignmentKey`; change the two together. */
+export const agentSessionCredential = (agentSessionId: string): string | undefined => {
+  const parts = agentSessionId.split("\u0000");
+  return parts.length === 3 && parts.every((part) => part.length > 0) ? parts[1] : undefined;
+};
+
 const isPreviewTabId = Schema.is(PreviewTabId);
 const decodeControlReason = Schema.decodeUnknownOption(PreviewAutomationControlReason);
 

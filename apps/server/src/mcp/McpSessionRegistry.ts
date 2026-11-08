@@ -32,6 +32,8 @@ export interface McpSessionRegistryShape {
     rawToken: string,
   ) => Effect.Effect<McpInvocationContext.McpThreadInvocationScope | undefined>;
   readonly touch: (threadId: ThreadId) => Effect.Effect<void>;
+  /** Expired credentials stay issued until revoked: a trusted turn can refresh them. */
+  readonly isIssued: (providerSessionId: string) => boolean;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
@@ -180,6 +182,12 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     issue,
     resolve,
     touch,
+    isIssued: (providerSessionId) => {
+      for (const record of SynchronizedRef.getUnsafe(state).records.values()) {
+        if (record.scope.thread.providerSessionId === providerSessionId) return true;
+      }
+      return false;
+    },
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(
       function* (providerSessionId) {
         yield* revokeWhere((record) => record.scope.thread.providerSessionId === providerSessionId);

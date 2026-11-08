@@ -33,6 +33,7 @@ import { beforeEach, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
@@ -338,6 +339,7 @@ const scope = {
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
 };
+const endedCredentials = new Set<string>();
 const asSession = (providerSessionId: string) => ({
   ...scope,
   thread: { ...testThread, providerSessionId },
@@ -393,6 +395,9 @@ const dependencies = Layer.mergeAll(
     turn: (threadId, active) => Effect.sync(() => desktopTurns.emit("turn", threadId, active)),
   }),
   PreviewAgentActivity.layer,
+  Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+    isIssued: (providerSessionId) => !endedCredentials.has(providerSessionId),
+  }),
 ).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-server-browser-" })),
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
@@ -466,6 +471,7 @@ beforeEach(() => {
   desktopReleased = Promise.withResolvers<void>();
   releasedDesktopTabs.length = 0;
   desktopConnections.length = 0;
+  endedCredentials.clear();
 });
 
 it.live("tells the desktop once per thread when its agent turns start and end", () =>
@@ -2030,6 +2036,10 @@ it.live("agents read a human's tab with no arguments and act on it only while no
         "http://localhost:5173/agent",
         expect.anything(),
       );
+      const closeRefused = yield* broker
+        .invoke<void>({ scope, tabId, operation: "close", input: {} })
+        .pipe(Effect.flip);
+      expect(closeRefused).toMatchObject({ reason: "agentMismatch" });
       yield* viewer.input({ type: "takeControl" });
       const retaken = yield* broker
         .invoke<void>({ scope, tabId, operation: "press", input: { key: "Enter" } })
@@ -2039,29 +2049,92 @@ it.live("agents read a human's tab with no arguments and act on it only while no
   ).pipe(Effect.provide(layer)),
 );
 
-it.live("a session's own tab stays its default while other sessions' tabs are listed", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { broker, tabId } = yield* ready;
-      const other = yield* broker.invoke<PreviewAutomationStatus>({
-        scope: asSession("agent-b"),
-        operation: "open",
-        input: { reuseExistingTab: false, show: false },
-      });
-      const status = yield* broker.invoke<PreviewAutomationStatus>({
-        scope,
-        operation: "status",
-        input: {},
-      });
-      expect(status.tabId).toBe(tabId);
-      expect(status.tabs).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ tabId, owner: "agent", ownedByCaller: true }),
-          expect.objectContaining({ tabId: other.tabId, owner: "agent", ownedByCaller: false }),
-        ]),
-      );
-    }),
-  ).pipe(Effect.provide(layer)),
+it.live(
+  "a session's own tab stays its default while other sessions' tabs are listed, and an ended session's tab is free to the thread",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { broker, tabId } = yield* ready;
+        const other = yield* broker.invoke<PreviewAutomationStatus>({
+          scope: asSession("agent-b"),
+          operation: "open",
+          input: { reuseExistingTab: false, show: false },
+        });
+        const live = yield* broker.invoke<PreviewAutomationStatus>({
+          scope: asSession("agent-c"),
+          operation: "open",
+          input: { reuseExistingTab: false, show: false },
+        });
+        const status = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "status",
+          input: {},
+        });
+        expect(status.tabId).toBe(tabId);
+        expect(status.tabs).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ tabId, owner: "agent", ownedByCaller: true }),
+            expect.objectContaining({ tabId: other.tabId, owner: "agent", ownedByCaller: false }),
+          ]),
+        );
+
+        endedCredentials.add("agent-b");
+        const released = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "status",
+          input: {},
+        });
+        expect(released.tabs).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              tabId: other.tabId,
+              owner: "unclaimed",
+              ownedByCaller: false,
+            }),
+            expect.objectContaining({ tabId: live.tabId, owner: "agent", ownedByCaller: false }),
+          ]),
+        );
+        const refused = yield* broker
+          .invoke<void>({
+            scope,
+            tabId: PreviewTabId.make(live.tabId!),
+            operation: "navigate",
+            input: { url: "http://localhost:5173/live" },
+          })
+          .pipe(Effect.flip);
+        expect(refused).toMatchObject({ reason: "agentMismatch" });
+        yield* broker.invoke({
+          scope,
+          tabId: PreviewTabId.make(other.tabId!),
+          operation: "navigate",
+          input: { url: "http://localhost:5173/released" },
+        });
+        expect(contextRequests).toHaveLength(3);
+        expect(contexts[1]!.page.goto).toHaveBeenCalledWith(
+          "http://localhost:5173/released",
+          expect.anything(),
+        );
+        const reopened = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { show: false },
+        });
+        expect(reopened.tabId).toBe(other.tabId);
+        yield* broker.invoke({
+          scope,
+          tabId: PreviewTabId.make(other.tabId!),
+          operation: "close",
+          input: {},
+        });
+        const closed = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          tabId,
+          operation: "status",
+          input: {},
+        });
+        expect(closed.tabs).not.toContainEqual(expect.objectContaining({ tabId: other.tabId }));
+      }),
+    ).pipe(Effect.provide(layer)),
 );
 
 it.live(

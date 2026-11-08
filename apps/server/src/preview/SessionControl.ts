@@ -26,6 +26,7 @@ const settle = (work: Promise<unknown>) =>
 export class SessionControl {
   readonly agentId: string | null;
   private readonly onGenerationChange: () => void;
+  private readonly ownerEnded: (agentId: string) => boolean;
   private tail: Promise<unknown> = Promise.resolve();
   private latestHuman: {
     entry: { viewerId: string; key: string; input: unknown; run: (input: never) => Promise<void> };
@@ -37,9 +38,14 @@ export class SessionControl {
   private epoch = 0;
   private closed = false;
 
-  constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
+  constructor(
+    agentId: string | null,
+    onGenerationChange: () => void = () => {},
+    ownerEnded: (agentId: string) => boolean = () => false,
+  ) {
     this.agentId = agentId;
     this.onGenerationChange = onGenerationChange;
+    this.ownerEnded = ownerEnded;
   }
 
   get controller() {
@@ -106,8 +112,13 @@ export class SessionControl {
     });
   }
 
+  /** A revoked credential cannot start new requests, so its tab serves the thread's later sessions. */
+  get agentEnded() {
+    return this.agentId !== null && this.ownerEnded(this.agentId);
+  }
+
   agentMayAct(agentId: string) {
-    return this.agentId === null || this.agentId === agentId;
+    return this.agentId === null || this.agentId === agentId || this.agentEnded;
   }
 
   agent<A>(agentId: string, run: () => Promise<A>, deadlineMs?: number) {

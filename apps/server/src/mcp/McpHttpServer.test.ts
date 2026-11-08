@@ -863,6 +863,7 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            isIssued: () => true,
             resolve: (presented) =>
               Effect.succeed(
                 presented === token
@@ -970,6 +971,7 @@ it.effect("admits provider and OAuth client credentials and points only clients 
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            isIssued: () => true,
             resolve: (token) =>
               Effect.succeed(
                 token === providerToken
@@ -1218,6 +1220,7 @@ it.effect("hides tools for links and refuses another environment while the beta 
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            isIssued: () => true,
             resolve: (presented) => Effect.succeed(presented === token ? scope : undefined),
           }),
         ),
@@ -1323,6 +1326,7 @@ it.effect("lists pull request watch tools only to threads that are not delegated
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            isIssued: () => true,
             resolve: (token) => Effect.succeed(scopes.get(token)),
           }),
         ),
@@ -1432,6 +1436,7 @@ it.effect(
           Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
           Layer.provide(
             Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+              isIssued: () => true,
               resolve: () => Effect.undefined,
             }),
           ),
