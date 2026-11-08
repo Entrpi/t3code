@@ -2821,7 +2821,7 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
-  // The broker disconnects timed-out hosts, including slow first installs. Reconnect.
+  // Re-register if the broker ever ends this host stream.
   yield* hostSession.pipe(
     Effect.exit,
     Effect.andThen(Effect.sleep(HOST_RECONNECT_DELAY)),

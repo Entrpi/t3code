@@ -654,15 +654,19 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         }
         return yield* new PreviewAutomationRequestQueueClosedError(requestContext);
       }
-      // The browser timer starts on delivery; allow its timeout response before evicting the host.
+      // The browser timer starts on delivery; allow its timeout response before giving up.
       const responseTimeoutMs =
         input.updateCurrentTab === false ? timeoutMs : timeoutMs + HOST_RESPONSE_GRACE_MS;
       const result = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(responseTimeoutMs));
       return yield* Option.match(result, {
         // The enclosing operation owns the span for this inline handler.
         onNone: Effect.fnUntraced(function* () {
-          // Never replay possibly applied actions; slow metadata reads must not evict the host.
-          if (input.updateCurrentTab !== false) {
+          // A remote host that stops answering is evicted; its unanswered actions are never replayed.
+          // The in-process server browser is only ever slow, and slow metadata reads never evict.
+          if (
+            input.updateCurrentTab !== false &&
+            connection.clientId !== SERVER_BROWSER_AUTOMATION_CLIENT_ID
+          ) {
             yield* disconnect(connection.clientId, connection.queue, true);
           }
           return yield* new PreviewAutomationTimeoutError(requestContext);

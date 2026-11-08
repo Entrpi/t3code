@@ -18,8 +18,10 @@ import {
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { PreviewBrowserRootError } from "../preview/PreviewBrowserHost.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -368,6 +370,72 @@ it.effect("names the click target that matched nothing when the server browser t
       expect(error.message).toBe(
         'Preview automation click timed out after 15000ms. No element matches ".definitely-no-such-t3-target".',
       );
+    }),
+  ),
+);
+
+it.effect("keeps the server browser and every thread's tab when one request times out", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+      const connected = yield* Deferred.make<void>();
+      const held = yield* Queue.unbounded<RoutedRequest>();
+      const requests = requestsFrom(
+        yield* broker.connect(makeHost({ clientId }), { preferred: true }),
+        () => Deferred.doneUnsafe(connected, Effect.void),
+      );
+      yield* Stream.runForEach(requests, (request) =>
+        Queue.offer(held, request).pipe(Effect.asVoid),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(connected);
+      const answer = (request: RoutedRequest, result: unknown) =>
+        broker.respond({
+          clientId,
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result,
+        });
+      const otherThread = {
+        ...scope,
+        thread: { ...scope.thread, threadId: ThreadId.make("thread-2") },
+      };
+      const tab1 = PreviewTabId.make("tab-1");
+      const tab2 = PreviewTabId.make("tab-2");
+      for (const [threadScope, tabId] of [
+        [scope, tab1],
+        [otherThread, tab2],
+      ] as const) {
+        const lease = yield* broker
+          .invoke({ scope: threadScope, operation: "snapshot", input: {} })
+          .pipe(Effect.forkScoped);
+        yield* answer(yield* Queue.take(held), { tabId });
+        yield* Fiber.join(lease);
+      }
+
+      const slow = yield* broker
+        .invoke<void>({ scope, operation: "click", input: {}, timeoutMs: 2_000 })
+        .pipe(Effect.flip, Effect.forkScoped);
+      expect((yield* Queue.take(held)).tabId).toBe(tab1);
+      const other = yield* broker
+        .invoke({ scope: otherThread, operation: "snapshot", input: {} })
+        .pipe(Effect.forkScoped);
+      const otherRequest = yield* Queue.take(held);
+      expect(otherRequest.tabId).toBe(tab2);
+
+      yield* TestClock.adjust("4 seconds");
+      expect((yield* Fiber.join(slow))._tag).toBe("PreviewAutomationTimeoutError");
+      yield* answer(otherRequest, { tabId: tab2 });
+      yield* Fiber.join(other);
+
+      const next = yield* broker
+        .invoke({ scope, operation: "snapshot", input: {} })
+        .pipe(Effect.forkScoped);
+      const nextRequest = yield* Queue.take(held);
+      expect(nextRequest.tabId).toBe(tab1);
+      yield* answer(nextRequest, { tabId: tab1 });
+      yield* Fiber.join(next);
     }),
   ),
 );
