@@ -302,10 +302,12 @@ export function HostedBrowserWebview(props: {
 
   if (!clientSettingsHydrated || !config) return null;
 
-  const renderingActive = active || backgroundActivity || pictureInPicture || recordingActive;
+  const capturing = backgroundActivity || recordingActive;
+  const renderingActive = active || capturing || pictureInPicture;
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
     renderingActive,
+    capturing,
     // Electron 43 can permanently blank a macOS webview after `visibility: hidden`.
     keepPaintableWhenInactive: isMacPlatform(navigator.platform),
     cornerRadius: presentation.cornerRadius,

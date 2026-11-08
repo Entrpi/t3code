@@ -222,9 +222,10 @@ export const make = Effect.gen(function* () {
   };
 
   /**
-   * Electron composites no offscreen guest, so its screenshot or screencast waits for a frame
-   * that never comes. The client paints the guest behind the app while one is pending; the
-   * capture then finishes on its own, and the guest goes back offscreen once none is.
+   * Chromium draws no offscreen or fully covered guest, so its screenshot or screencast waits
+   * for a frame that never comes. While one is pending, the client draws one non-opaque pixel of
+   * the guest above the app's overlays and the desktop keeps the window unthrottled; the guest
+   * goes back offscreen once none is.
    */
   const syncPainting = (tab: AttachedTab) => {
     const active =

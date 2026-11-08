@@ -1786,10 +1786,15 @@ describe("PreviewManager", () => {
       Effect.gen(function* () {
         const host = yield* DesktopBrowserHost.DesktopBrowserHost;
         const serverTab = { threadId: "thread-1", tabId: "server-tab-1" };
+        const hostContents = makeTestHostWebContents();
         const contents = Object.assign(
-          makeTestPreviewWebContents(async () => {
-            throw new Error("unused");
-          }, 42),
+          makeTestPreviewWebContents(
+            async () => {
+              throw new Error("unused");
+            },
+            42,
+            hostContents,
+          ),
           {
             isDevToolsOpened: () => false,
             getUserAgent: () => "Electron",
@@ -1820,6 +1825,12 @@ describe("PreviewManager", () => {
         yield* Deferred.await(attached);
         // Navigating rebuilds the tab's state, which must keep the server tab it answers for.
         yield* manager.navigate("tab_1", "https://example.com/next");
+        const setBackgroundThrottling = vi.fn();
+        yield* manager.setMainWindow({
+          isDestroyed: () => false,
+          once: vi.fn(),
+          webContents: { setBackgroundThrottling },
+        } as never);
         yield* Queue.clear(capturing);
 
         yield* host.handleCommandLine(
@@ -1834,8 +1845,14 @@ describe("PreviewManager", () => {
           }),
         );
         expect(yield* Queue.take(capturing)).toBe(true);
+        expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        yield* manager.startRecording("tab_1");
+        hostContents.displayMediaHandler()?.({ frame: hostContents.mainFrame }, () => {});
+        yield* manager.stopRecording("tab_1");
+        expect(setBackgroundThrottling.mock.calls).toEqual([[false], [false]]);
         screenshot.resolve({ data: "" });
         expect(yield* Queue.take(capturing)).toBe(false);
+        expect(setBackgroundThrottling.mock.calls).toEqual([[false], [false], [true]]);
       }).pipe(Effect.provide(managerLayer()), Effect.scoped),
   );
 

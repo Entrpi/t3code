@@ -24,8 +24,9 @@ function originOf(url: string): string | null {
 }
 
 /**
- * Keeps a hidden guest painting behind the app while the desktop host captures it; Electron
- * composites no offscreen guest, so its screenshot or stream would otherwise never finish.
+ * Keeps one non-opaque pixel of a hidden guest drawn above the app's overlays while the desktop
+ * host captures it; Chromium draws no offscreen or fully covered guest, so its screenshot or
+ * stream would otherwise never finish.
  */
 export function createCaptureActivity(tabId: string) {
   let release: (() => void) | null = null;
