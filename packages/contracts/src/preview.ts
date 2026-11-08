@@ -148,6 +148,9 @@ export const PreviewStreamHostSetup = Schema.Struct({
 export type PreviewStreamHostSetup = typeof PreviewStreamHostSetup.Type;
 export const PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE = 4503;
 
+export const PreviewPlacement = Schema.Literals(["panel", "floating"]);
+export type PreviewPlacement = typeof PreviewPlacement.Type;
+
 export const PreviewSessionSnapshot = Schema.Struct({
   threadId: TrimmedNonEmptyString,
   tabId: PreviewTabId,
@@ -164,7 +167,13 @@ export const PreviewSessionSnapshot = Schema.Struct({
   headless: Schema.optional(Schema.Boolean),
   automationOwner: Schema.optional(Schema.String),
   reveal: Schema.optional(Schema.Boolean),
-  revealRequest: Schema.optional(Schema.Struct({ id: Schema.String, force: Schema.Boolean })),
+  revealRequest: Schema.optional(
+    Schema.Struct({
+      id: Schema.String,
+      force: Schema.Boolean,
+      placement: Schema.optional(PreviewPlacement),
+    }),
+  ),
   updatedAt: Schema.String,
 });
 export type PreviewSessionSnapshot = typeof PreviewSessionSnapshot.Type;

@@ -30,6 +30,8 @@ import {
 vi.mock("../../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => true,
 }));
+const clientSettings = vi.hoisted(() => ({ browserAutoShowFloatingPreview: true }));
+vi.mock("../../hooks/useSettings", () => ({ getClientSettings: () => clientSettings }));
 
 const ref = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-1"));
 const threadKey = scopedThreadKey(ref);
@@ -73,6 +75,7 @@ const deviceState = (input: {
 const floating = { sheetLayout: false, autoShowFloatingPreview: true };
 
 function setup() {
+  clientSettings.browserAutoShowFloatingPreview = true;
   resetPreviewStateForTests();
   resetDeviceSessionBaselinesForTests();
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
@@ -344,7 +347,7 @@ describe("startAgentOpenedPreviews", () => {
     expect(floatingTabId()).toBe("tab_agent");
   });
 
-  it("reveals an existing tab only for a new reveal request", () => {
+  it("reveals an existing tab only for a new reveal request, and places it where the request says", () => {
     using _following = following();
     const tab = serverTab({ revealRequest: { id: "r1", force: false } });
     reconcilePreviewServerSessions(ref, { sessions: [tab], serverEpoch, revision: 1 });
@@ -360,6 +363,75 @@ describe("startAgentOpenedPreviews", () => {
     expect(useRightPanelStore.getState().byThreadKey[threadKey]?.activeSurfaceId).toBe(
       "browser:tab_a",
     );
+
+    const userActionRevision = useRightPanelStore.getState().getUserActionRevision(ref);
+    navigated(4, {
+      ...tab,
+      revealRequest: { id: "r3", force: true, placement: "floating" },
+      updatedAt: "2026-01-01T00:00:03.000Z",
+    });
+    expect(floatingTabId()).toBe("tab_a");
+    expect(useRightPanelStore.getState().byThreadKey[threadKey]?.isOpen).toBe(false);
+
+    navigated(5, {
+      ...tab,
+      revealRequest: { id: "r4", force: true, placement: "panel" },
+      updatedAt: "2026-01-01T00:00:04.000Z",
+    });
+    expect(floatingTabId()).toBeNull();
+    expect(useRightPanelStore.getState().byThreadKey[threadKey]).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: "browser:tab_a",
+    });
+    expect(useRightPanelStore.getState().getUserActionRevision(ref)).toBe(userActionRevision);
+  });
+
+  it("places a newly opened tab after the panel adds it, even with floating previews off", () => {
+    using _following = following();
+    clientSettings.browserAutoShowFloatingPreview = false;
+    reconcilePreviewServerSessions(ref, { sessions: [], serverEpoch, revision: 1 });
+    useRightPanelStore.getState().openBrowser(ref, null);
+    expect(useRightPanelStore.getState().byThreadKey[threadKey]).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: "browser:new",
+    });
+
+    const openHidden = (revision: number, tabId: string) => {
+      const opened = serverTab({ tabId, reveal: false });
+      applyPreviewServerEvent(ref, {
+        type: "opened",
+        threadId: "thread-1",
+        tabId,
+        createdAt: opened.updatedAt,
+        snapshot: opened,
+        serverEpoch,
+        revision,
+      });
+    };
+    openHidden(2, "tab_new");
+    navigated(
+      3,
+      serverTab({
+        tabId: "tab_new",
+        revealRequest: { id: "r1", force: true, placement: "floating" },
+      }),
+    );
+    expect(floatingTabId()).toBe("tab_new");
+    expect(useRightPanelStore.getState().byThreadKey[threadKey]?.isOpen).toBe(false);
+
+    openHidden(4, "tab_side");
+    navigated(
+      5,
+      serverTab({
+        tabId: "tab_side",
+        revealRequest: { id: "r2", force: true, placement: "panel" },
+      }),
+    );
+    expect(useRightPanelStore.getState().byThreadKey[threadKey]).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: "browser:tab_side",
+    });
+    expect(floatingTabId()).toBe("tab_new");
   });
 
   it("never reveals tabs this client opened, desktop tabs, or a tab whose close failed", () => {

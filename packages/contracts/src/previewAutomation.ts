@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   PREVIEW_VIEWPORT_MAX_AREA,
+  PreviewPlacement,
   PreviewRenderedViewportSize,
   PreviewTabId,
   PreviewViewportPresetId,
@@ -159,12 +160,20 @@ export const PreviewAutomationOpenInput = Schema.Struct({
   profileId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))).annotate({
     description: PROFILE_GUIDANCE,
   }),
-}).check(
-  Schema.makeFilter(
-    (input) =>
-      !(input.tabId !== undefined && input.reuseExistingTab === false) ||
-      "tabId cannot be combined with reuseExistingTab=false.",
+  placement: Schema.optional(
+    PreviewPlacement.annotate({
+      description:
+        "Where to show your tab: `panel`, a right-panel tab (the Browser sidebar), or `floating`, over chat. Also moves your open tab. Set only when the user asks.",
+    }),
   ),
+}).check(
+  Schema.makeFilter((input) => {
+    if (input.tabId !== undefined && input.reuseExistingTab === false)
+      return "tabId cannot be combined with reuseExistingTab=false.";
+    if (input.placement !== undefined && (input.open ?? input.show) === false)
+      return "placement cannot be combined with open=false.";
+    return true;
+  }),
 );
 export type PreviewAutomationOpenInput = typeof PreviewAutomationOpenInput.Type;
 

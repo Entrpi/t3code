@@ -109,6 +109,19 @@ it.layer(layer)("PreviewManager", (it) => {
       expect(last?.type).toBe("navigated");
       if (last?.type === "navigated")
         expect(last.snapshot.revealRequest).toEqual(second?.revealRequest);
+      yield* manager.requestReveal({
+        threadId,
+        tabId: opened.tabId,
+        force: false,
+        placement: "panel",
+      });
+      const placed = (yield* manager.list({ threadId })).sessions[0]?.revealRequest;
+      expect(placed).toEqual({ id: expect.any(String), force: true, placement: "panel" });
+      expect(placed?.id).not.toBe(second?.revealRequest?.id);
+      yield* manager.requestReveal({ threadId, tabId: opened.tabId, force: false });
+      const unplaced = (yield* manager.list({ threadId })).sessions[0]?.revealRequest;
+      expect(unplaced).not.toHaveProperty("placement");
+      expect(unplaced?.force).toBe(false);
     }),
   );
 

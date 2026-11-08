@@ -16,6 +16,7 @@ import { getClientSettings } from "../../hooks/useSettings";
 import {
   browserMiniPlayerSource,
   type PreviewMiniPlayerSource,
+  selectThreadPreviewMiniPlayerTabId,
   usePreviewMiniPlayerStore,
 } from "../../previewMiniPlayerStore";
 import {
@@ -53,6 +54,29 @@ export function revealServerTabs(
     } else if (!surface) {
       usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(session.tabId));
     }
+  }
+}
+
+/** Puts revealed browsers where their request says, whatever the floating-preview setting. */
+function placeServerTabs(
+  threadRef: ScopedThreadRef,
+  sessions: ReadonlyArray<PreviewSessionSnapshot>,
+): void {
+  if (!readEnvironmentSupportsServerBrowser(threadRef.environmentId)) return;
+  for (const session of sessions) {
+    const miniPlayer = usePreviewMiniPlayerStore.getState();
+    const panel = useRightPanelStore.getState();
+    if (session.revealRequest?.placement === "panel") {
+      if (selectThreadPreviewMiniPlayerTabId(miniPlayer.byThreadKey, threadRef) === session.tabId)
+        miniPlayer.close(threadRef);
+      panel.openBrowser(threadRef, session.tabId, true);
+      continue;
+    }
+    miniPlayer.open(threadRef, browserMiniPlayerSource(session.tabId));
+    const current = panel.byThreadKey[scopedThreadKey(threadRef)];
+    // Like the Float preview button: a panel showing this tab would hide the float.
+    if (current?.isOpen && current.activeSurfaceId === `browser:${session.tabId}`)
+      panel.close(threadRef, true);
   }
 }
 
@@ -104,16 +128,20 @@ function followThread(threadKey: string, threadRef: ScopedThreadRef): () => void
   return appAtomRegistry.subscribe(atom, (next) => {
     const before = previous;
     previous = next;
-    // Reveals run first so a revealed tab floats before it gains a panel tab.
     const revealed = freshlyRevealedServerTabs(before, next);
-    if (revealed.length > 0) {
-      revealServerTabs(threadRef, revealed, {
+    const placed = revealed.filter((session) => session.revealRequest?.placement !== undefined);
+    const unplaced = revealed.filter((session) => session.revealRequest?.placement === undefined);
+    // Unplaced reveals run first so a new tab floats before it gains a panel tab; placed ones
+    // run after reconcile, which could otherwise activate a tab meant to float.
+    if (unplaced.length > 0) {
+      revealServerTabs(threadRef, unplaced, {
         autoShowFloatingPreview: getClientSettings().browserAutoShowFloatingPreview,
       });
     }
     if (before.sessions !== next.sessions || before.listLoaded !== next.listLoaded) {
       followPreviewSessions(threadRef, next);
     }
+    if (placed.length > 0) placeServerTabs(threadRef, placed);
   });
 }
 

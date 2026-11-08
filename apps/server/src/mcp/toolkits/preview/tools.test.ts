@@ -50,4 +50,7 @@ it("preview_open accepts a target while preserving open input constraints", () =
   });
   expect(() => decode({ target: { ...target, port: 0 } })).toThrow();
   expect(() => decode({ target, tabId: "tab-1", reuseExistingTab: false })).toThrow();
+  expect(decode({ placement: "panel" })).toEqual({ placement: "panel" });
+  expect(() => decode({ placement: "floating", open: false })).toThrow();
+  expect(() => decode({ placement: "floating", show: false })).toThrow();
 });

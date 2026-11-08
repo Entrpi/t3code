@@ -6,6 +6,7 @@ import {
   type PreviewListInput,
   type PreviewListResult,
   type PreviewOpenInput,
+  type PreviewPlacement,
   type PreviewReportStatusInput,
   type PreviewResizeInput,
   type PreviewAdjustInput,
@@ -47,7 +48,11 @@ export class PreviewManager extends Context.Service<
       input: PreviewCloseInput & { readonly tabId: string },
     ) => Effect.Effect<void, PreviewError>;
     readonly requestReveal: (
-      input: PreviewCloseInput & { readonly tabId: string; readonly force: boolean },
+      input: PreviewCloseInput & {
+        readonly tabId: string;
+        readonly force: boolean;
+        readonly placement?: PreviewPlacement;
+      },
     ) => Effect.Effect<void, PreviewError>;
     readonly resize: (
       input: PreviewResizeInput,
@@ -428,7 +433,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           reveal: true,
           revealRequest: {
             id: yield* random.uuidV4(),
-            force: input.force,
+            // A placement is an explicit request, so clients that predate it still show the tab.
+            force: input.force || input.placement !== undefined,
+            ...(input.placement === undefined ? {} : { placement: input.placement }),
           },
           updatedAt: yield* currentIsoTimestamp,
         };

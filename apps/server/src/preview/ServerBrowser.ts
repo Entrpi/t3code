@@ -2085,6 +2085,7 @@ const make = Effect.gen(function* () {
                   threadId: tab.threadId,
                   tabId: tab.tabId,
                   force: reveal === true,
+                  ...(open.placement === undefined ? {} : { placement: open.placement }),
                 }),
               );
             }
