@@ -1282,6 +1282,21 @@ const unsavedSecretNote = (Contracts as Record<string, unknown>).SECRET_REQUEST_
   | Readonly<Record<string, string>>
   | undefined;
 
+// The notes a preview snapshot carries when its tree or screenshot did not answer, looked up the
+// same way.
+const snapshotTreeUnavailableNote = (Contracts as Record<string, unknown>)
+  .previewSnapshotTreeUnavailableNote as
+  | ((
+      page: { width: number; height: number },
+      screenshot: { width: number; height: number },
+    ) => string)
+  | undefined;
+const snapshotNoScreenshotNote = (Contracts as Record<string, unknown>)
+  .PREVIEW_SNAPSHOT_NO_SCREENSHOT_NOTE as string | undefined;
+
+const isSize = (value: unknown): value is { width: number; height: number } =>
+  isRecord(value) && typeof value.width === "number" && typeof value.height === "number";
+
 /** Fields T3 adds to real thread and task results, applied to mocks and defaults alike. */
 const withProductFields = (name: string, value: unknown, child: boolean): unknown => {
   if (!isRecord(value)) return value;
@@ -1304,6 +1319,18 @@ const withProductFields = (name: string, value: unknown, child: boolean): unknow
     case "request_secret": {
       const note = typeof value.status === "string" ? unsavedSecretNote?.[value.status] : undefined;
       return note === undefined || value.note !== undefined ? value : { ...value, note };
+    }
+    case "preview_snapshot": {
+      const { accessibilityTreeUnavailable: page, screenshotUnavailable: noShot } = value;
+      return {
+        ...value,
+        ...(isSize(page) && isSize(value.screenshot) && snapshotTreeUnavailableNote
+          ? { accessibilityTreeUnavailable: snapshotTreeUnavailableNote(page, value.screenshot) }
+          : {}),
+        ...(noShot === true && snapshotNoScreenshotNote !== undefined
+          ? { screenshotUnavailable: snapshotNoScreenshotNote }
+          : {}),
+      };
     }
     case "delegate_task":
     case "task_status": {

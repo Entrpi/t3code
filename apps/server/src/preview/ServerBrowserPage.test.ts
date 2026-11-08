@@ -5,7 +5,20 @@ import {
   type CDPSession,
   type Page,
 } from "playwright-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  PREVIEW_SNAPSHOT_NO_SCREENSHOT_NOTE,
+  previewSnapshotTreeUnavailableNote,
+} from "@t3tools/contracts";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
@@ -53,6 +66,17 @@ describe("server browser element refs", () => {
     const locator = locators(line)[0];
     expect(locator).toBeDefined();
     return locator!;
+  };
+  /** Replaces Chromium's screenshot reply wherever `answer` returns one; returns the call count. */
+  const stubScreenshots = (answer: (call: number) => Promise<never> | undefined) => {
+    const send = cdp.send.bind(cdp);
+    let calls = 0;
+    Object.assign(cdp, {
+      send: ((method: string, params?: object) =>
+        (method === "Page.captureScreenshot" ? answer(++calls) : undefined) ??
+        send(method as never, params as never)) as CDPSession["send"],
+    });
+    return () => calls;
   };
   const repeatedRows = `<ul>${Array.from({ length: 5 }, (_, i) => `<li>row ${i + 1}<button data-testid="delete-row" onclick="this.parentElement.remove()">delete</button></li>`).join("")}</ul>`;
 
@@ -262,6 +286,110 @@ describe("server browser element refs", () => {
     },
   );
 
+  it("returns the page and screenshot without refs when the accessibility tree times out", async () => {
+    await page.setContent(
+      '<button>Save</button><input type="password" aria-label="PIN" value="open-pass"><p>Code open-pass</p><div contenteditable style="-webkit-text-security: disc">editable-pass</div>',
+    );
+    const stale = buttonLocator((await takeSnapshot()).accessibilityTree, "Save");
+    // As ServerBrowser.applyZoom does at 2x: the page is 640x360 while viewportSize() stays 1280x720.
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      width: 640,
+      height: 360,
+      deviceScaleFactor: 2,
+      mobile: false,
+    });
+    // As on a desktop tab whose Playwright utility world never answers.
+    Object.assign(page, {
+      ariaSnapshot: async () => {
+        throw Object.assign(new Error("Timeout exceeded."), { name: "TimeoutError" });
+      },
+    });
+
+    const result = await takeSnapshot();
+
+    expect(result.accessibilityTree).toBeUndefined();
+    expect(result.accessibilityTreeUnavailable).toBe(
+      previewSnapshotTreeUnavailableNote({ width: 640, height: 360 }, { width: 1280, height: 720 }),
+    );
+    expect(result.screenshot).toMatchObject({ width: 1280, height: 720 });
+    expect(result.screenshotUnavailable).toBeUndefined();
+    expect(result.visibleText).toContain("Code ••••••••");
+    expect(result.visibleText).not.toContain("editable-pass");
+    await expect(ServerBrowserPage.click(page, { locator: stale })).rejects.toMatchObject({
+      detail: { staleRef: true },
+    });
+  });
+
+  it("returns the page and refs without a screenshot when the screenshot never answers", async () => {
+    await page.setContent(
+      '<button>Save</button><input type="password" aria-label="PIN" value="open-pass"><p>Code open-pass</p>',
+    );
+    // As on a desktop guest that paints no frames.
+    stubScreenshots(() => new Promise<never>(() => {}));
+    using now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const tree = page.ariaSnapshot.bind(page);
+    // The clock moves only after the tree's budget was set, so the screenshot cutoff is due at once.
+    Object.assign(page, {
+      ariaSnapshot: async (options: Parameters<Page["ariaSnapshot"]>[0]) => {
+        const answered = await tree(options);
+        now.mockReturnValue(9_500);
+        return answered;
+      },
+    });
+
+    const result = await takeSnapshot();
+
+    expect(result.screenshot).toBeUndefined();
+    expect(result.screenshotUnavailable).toBe(PREVIEW_SNAPSHOT_NO_SCREENSHOT_NOTE);
+    expect(buttonLocator(result.accessibilityTree, "Save")).toBeDefined();
+    expect(result.visibleText).toContain("Code ••••••••");
+    expect(JSON.stringify(result)).not.toContain("open-pass");
+  });
+
+  it("retries a screenshot that fails instead of reporting it unready", async () => {
+    await page.setContent("<button>Save</button>");
+    const captures = stubScreenshots((call) =>
+      call === 1
+        ? Promise.reject(new Error("The page this screenshot was for has moved on."))
+        : undefined,
+    );
+
+    const result = await takeSnapshot();
+
+    expect(result.screenshot).toMatchObject({ width: 1280 });
+    expect(result.screenshotUnavailable).toBeUndefined();
+    expect(captures()).toBe(2);
+  });
+
+  it("fails a late retry whose tree had no time instead of reporting the tree unavailable", async () => {
+    await page.setContent("<button>Save</button>");
+    stubScreenshots((call) =>
+      call === 1
+        ? Promise.reject(new Error("The page this screenshot was for has moved on."))
+        : undefined,
+    );
+    using now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const tree = page.ariaSnapshot.bind(page);
+    let trees = 0;
+    // The first tree answers at 6.5 s; the retry's 1.5 s budget then runs out, as Playwright's would.
+    Object.assign(page, {
+      ariaSnapshot: async (options: Parameters<Page["ariaSnapshot"]>[0]) => {
+        if (++trees > 1) {
+          throw Object.assign(new Error("Timeout 1500ms exceeded."), { name: "TimeoutError" });
+        }
+        const answered = await tree(options);
+        now.mockReturnValue(6_500);
+        return answered;
+      },
+    });
+
+    await expect(takeSnapshot()).rejects.toMatchObject({
+      tag: "PreviewAutomationTimeoutError",
+      message: expect.stringContaining("too busy"),
+    });
+    expect(trees).toBe(2);
+  });
+
   it("preserves quoted attribute values containing ref engine text", async () => {
     await page.setContent(
       '<button data-example=" >> aria-ref=e1" onclick="this.textContent=\'saved\'">save</button>',
@@ -309,7 +437,7 @@ describe("server browser snapshot screenshot", () => {
   const screenshotOf = async (html: string) => {
     const page = await context.newPage();
     await page.setContent(html);
-    const { screenshot, fullScreenshot } = await ServerBrowserPage.snapshot({
+    const snapshot = await ServerBrowserPage.snapshot({
       page,
       cdp: await context.newCDPSession(page),
       renderScale: 2,
@@ -318,6 +446,8 @@ describe("server browser snapshot screenshot", () => {
       networkEntries: [],
       actionTimeline: [],
     });
+    const screenshot = snapshot.screenshot!;
+    const { fullScreenshot } = snapshot;
     // The server has no DOM types, so the decoder runs as page source.
     const points = [
       [0.15, 0.75],
@@ -372,7 +502,7 @@ describe("server browser snapshot screenshot", () => {
       actionTimeline: [],
     });
 
-    expect([screenshot.width, screenshot.height]).toEqual([1280, 800]);
+    expect([screenshot!.width, screenshot!.height]).toEqual([1280, 800]);
   });
 });
 

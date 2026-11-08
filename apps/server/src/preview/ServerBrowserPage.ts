@@ -2,6 +2,7 @@
 
 import {
   type BrowserRecordingFrameRate,
+  PREVIEW_SNAPSHOT_NO_SCREENSHOT_NOTE,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type PreviewAutomationClickInput,
   type PreviewAutomationConsoleEntry,
@@ -17,6 +18,7 @@ import {
   type PreviewAutomationTypeInput,
   type PreviewAutomationUploadInput,
   type PreviewAutomationWaitForInput,
+  previewSnapshotTreeUnavailableNote,
 } from "@t3tools/contracts";
 import { constVoid } from "effect/Function";
 import * as Schema from "effect/Schema";
@@ -221,6 +223,9 @@ const withoutTreeDataPayloads = (tree: string) =>
 
 // The broker waits 15s for the host; a snapshot, retry included, answers well before.
 const SNAPSHOT_TIMEOUT_MS = 10_000;
+const TREE_RESERVE_MS = 2_000;
+/** A retry's tree timeout under half a first capture's budget says nothing about the tab. */
+const MIN_TREE_BUDGET_MS = (SNAPSHOT_TIMEOUT_MS - TREE_RESERVE_MS) / 2;
 const FRAME_ANSWER_MS = 1_000;
 
 // Include password and CSS-masked text in open shadow roots, normalized like accessible text.
@@ -260,14 +265,21 @@ const VALUE_TOO_LONG = "A password field holds a value too long to hide, so no s
 /** Reuse one CDP session per out-of-process frame across snapshots. */
 const frameSessions = new WeakMap<Frame, Promise<CDPSession>>();
 
-/** Returns undefined on failure or frame timeout. */
-const answered = <A>(promise: Promise<A>) => {
+/** Resolves undefined if the promise is still pending at `at`; its failure still rejects. */
+const settledBy = <A>(promise: Promise<A>, at: number) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<undefined>((resolve) => {
-    timer = setTimeout(() => resolve(undefined), FRAME_ANSWER_MS);
+    timer = setTimeout(() => resolve(undefined), Math.max(0, at - Date.now()));
   });
-  return Promise.race([promise.catch(() => undefined), late]).finally(() => clearTimeout(timer));
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 };
+
+/** Returns undefined on failure or frame timeout. */
+const answered = <A>(promise: Promise<A>) =>
+  settledBy(
+    promise.catch(() => undefined),
+    Date.now() + FRAME_ANSWER_MS,
+  );
 
 /** Isolated worlds prevent spoofing; desktop out-of-process frames use page worlds. Missing own-frame reads or changed frames fail; other missing reads return undefined. */
 const openReaders = async (page: Page, cdp: CDPSession) => {
@@ -529,7 +541,7 @@ type SnapshotInput = {
 const renderingOf = async (input: SnapshotInput) => {
   if (input.renderScale !== "display") {
     const viewport = input.page.viewportSize() ?? { width: 1280, height: 800 };
-    return { renderScale: input.renderScale, viewport };
+    return { renderScale: input.renderScale, viewport, metrics: null };
   }
   // The display ratio a desktop page reports includes its page zoom, and its sizes are CSS pixels.
   const page = await readPageMetrics(input.cdp);
@@ -539,6 +551,7 @@ const renderingOf = async (input: SnapshotInput) => {
       width: Math.round(page.width * page.zoom),
       height: Math.round(page.height * page.zoom),
     },
+    metrics: page,
   };
 };
 
@@ -546,7 +559,7 @@ const capture = async (
   input: SnapshotInput,
   deadline: number,
 ): Promise<PreviewAutomationSnapshot> => {
-  const { renderScale, viewport } = await renderingOf(input);
+  const { renderScale, viewport, metrics } = await renderingOf(input);
   // A late metrics reply must not begin a capture after viewers have resumed.
   if (Date.now() >= deadline) throw tooBusy();
   const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / (viewport.width * renderScale));
@@ -556,29 +569,36 @@ const capture = async (
   const { readers, read } = await openReaders(input.page, input.cdp);
   const before = await read();
   // Bracket the tree with value reads to detect changes; await tree completion before retrying failed captures.
-  const pageAndScreenshot = Promise.all([
-    input.page.evaluate(SNAPSHOT_SCRIPT) as Promise<
-      Pick<
-        PreviewAutomationSnapshot,
-        "url" | "title" | "loading" | "visibleText" | "interactiveElements"
-      >
-    >,
-    captureViewport(input.cdp, { format: "png" }).then(async (full) =>
-      scale < 1
-        ? {
-            data: await shrinkPng(input.cdp, full, scale),
-            full: input.fullScreenshot ? full : undefined,
-          }
-        : { data: full, full: undefined },
-    ),
-  ]);
-  void pageAndScreenshot.catch(constVoid);
+  const pageRead = input.page.evaluate(SNAPSHOT_SCRIPT) as Promise<
+    Pick<
+      PreviewAutomationSnapshot,
+      "url" | "title" | "loading" | "visibleText" | "interactiveElements"
+    >
+  >;
+  const screenshot = captureViewport(input.cdp, { format: "png" }).then(async (full) =>
+    scale < 1
+      ? {
+          data: await shrinkPng(input.cdp, full, scale),
+          full: input.fullScreenshot ? full : undefined,
+        }
+      : { data: full, full: undefined },
+  );
+  void pageRead.catch(constVoid);
+  void screenshot.catch(constVoid);
   // Leaves time for the second read; a frame that never loads holds the tree until then.
-  const tree = await input.page.ariaSnapshot({
-    mode: "ai",
-    boxes: true,
-    timeout: Math.max(1, deadline - Date.now() - 2_000),
-  });
+  const treeBudget = deadline - Date.now() - TREE_RESERVE_MS;
+  const tree = await input.page
+    .ariaSnapshot({ mode: "ai", boxes: true, timeout: Math.max(1, treeBudget) })
+    // Some desktop tabs' Playwright utility world never answers; raw CDP reads and screenshots still do.
+    .catch((cause: unknown) => {
+      if (
+        cause instanceof Error &&
+        cause.name === "TimeoutError" &&
+        treeBudget >= MIN_TREE_BUDGET_MS
+      )
+        return undefined;
+      throw cause;
+    });
   const after = await read(before);
   // A value that changed meanwhile may be in the tree under neither reading.
   if (after.some((values, i) => values && JSON.stringify(values) !== JSON.stringify(before[i])))
@@ -587,16 +607,43 @@ const capture = async (
   // Unread frames can expose values only if their content appears in the tree.
   const unread = readers.flatMap((reader, i) => (after[i] ? [] : reader.frames));
   const filled = /^\s*- iframe (?:\[active\] )?\[ref=(\S+?)\].*:$/gm;
-  for (const [, ref] of unread.length ? tree.matchAll(filled) : []) {
+  for (const [, ref] of tree !== undefined && unread.length ? tree.matchAll(filled) : []) {
     const iframe = await input.page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 2_000 });
     if (!iframe) throw pageChanged();
     const frame = await iframe.contentFrame();
     void iframe.dispose().catch(constVoid);
     if (frame && unread.includes(frame)) throw tooBusy();
   }
-  const [page, { full, data }] = await pageAndScreenshot;
-  if (state.generation !== generation) throw pageChanged();
+  const page = await pageRead;
   const mask = (text: string) => (dotted ? text.replace(dotted, MASKED_VALUE) : text);
+  const base = {
+    ...page,
+    url: withoutDataPayload(page.url),
+    // Mask text before truncating so a value crossing the cut cannot leak its prefix.
+    visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
+    consoleEntries: [...input.consoleEntries],
+    networkEntries: [...input.networkEntries],
+    actionTimeline: [...input.actionTimeline],
+  };
+  if (tree === undefined) {
+    const { data, full } = await screenshot;
+    const size = pngSize(data);
+    // Headless zoom overrides the layout size without updating Playwright's viewportSize().
+    // CDP Input, which acts at x and y, takes the CSS pixels these report.
+    const { width, height } = metrics ?? (await readPageMetrics(input.cdp));
+    if (state.generation !== generation) throw pageChanged();
+    return {
+      ...base,
+      accessibilityTreeUnavailable: previewSnapshotTreeUnavailableNote({ width, height }, size),
+      screenshot: { mimeType: "image/png", data, ...size },
+      ...(full !== undefined ? { fullScreenshot: { data: full, ...pngSize(full) } } : {}),
+    };
+  }
+  // A desktop guest paints no frames while its window is not composited, so its screenshot may
+  // never answer. With a tree, stop just before the snapshot's own timer; without one there is
+  // nothing to return, and that timer fails the snapshot.
+  const shot = await settledBy(screenshot, deadline - 500);
+  if (state.generation !== generation) throw pageChanged();
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
@@ -608,20 +655,16 @@ const capture = async (
       return `[ref=${ref}]`;
     });
   return {
-    ...page,
-    url: withoutDataPayload(page.url),
-    // Mask text before truncating so a value crossing the cut cannot leak its prefix.
-    visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
+    ...base,
     accessibilityTree,
-    consoleEntries: [...input.consoleEntries],
-    networkEntries: [...input.networkEntries],
-    actionTimeline: [...input.actionTimeline],
-    screenshot: {
-      mimeType: "image/png",
-      data,
-      ...pngSize(data),
-    },
-    ...(full !== undefined ? { fullScreenshot: { data: full, ...pngSize(full) } } : {}),
+    ...(shot === undefined
+      ? { screenshotUnavailable: PREVIEW_SNAPSHOT_NO_SCREENSHOT_NOTE }
+      : {
+          screenshot: { mimeType: "image/png", data: shot.data, ...pngSize(shot.data) },
+          ...(shot.full !== undefined
+            ? { fullScreenshot: { data: shot.full, ...pngSize(shot.full) } }
+            : {}),
+        }),
   };
 };
 

@@ -542,16 +542,22 @@ export const PreviewAutomationSnapshot = Schema.Struct({
   loading: Schema.Boolean,
   visibleText: Schema.String,
   interactiveElements: Schema.Array(PreviewAutomationElement),
-  accessibilityTree: Schema.Unknown,
+  accessibilityTree: Schema.optional(Schema.Unknown),
+  /** Present instead of `accessibilityTree` when the tree did not answer in time; never with `screenshotUnavailable`. */
+  accessibilityTreeUnavailable: Schema.optional(Schema.String),
   consoleEntries: Schema.Array(PreviewAutomationConsoleEntry),
   networkEntries: Schema.Array(PreviewAutomationNetworkEntry),
   actionTimeline: Schema.Array(PreviewAutomationActionEvent),
-  screenshot: Schema.Struct({
-    mimeType: Schema.Literal("image/png"),
-    data: Schema.String,
-    width: Schema.Int,
-    height: Schema.Int,
-  }),
+  screenshot: Schema.optional(
+    Schema.Struct({
+      mimeType: Schema.Literal("image/png"),
+      data: Schema.String,
+      width: Schema.Int,
+      height: Schema.Int,
+    }),
+  ),
+  /** Present instead of `screenshot` when it was not ready in time; never with `accessibilityTreeUnavailable`. */
+  screenshotUnavailable: Schema.optional(Schema.String),
   /** The capture before `screenshot` was capped for the agent, when requested and larger. */
   fullScreenshot: Schema.optional(
     Schema.Struct({ data: Schema.String, width: Schema.Int, height: Schema.Int }),
@@ -563,6 +569,13 @@ export const PreviewAutomationSnapshotInput = Schema.Struct({
   fullScreenshot: Schema.optional(Schema.Boolean),
 });
 export type PreviewAutomationSnapshotInput = typeof PreviewAutomationSnapshotInput.Type;
+
+type Size = { readonly width: number; readonly height: number };
+export const previewSnapshotTreeUnavailableNote = (page: Size, screenshot: Size) =>
+  `No element refs: the accessibility tree did not answer in time, and locators and selectors may time out too. Act by x and y: read them from the screenshot (pass includeImage=true if no image is attached), or, on your own or an unclaimed tab, from the element's getBoundingClientRect() via preview_evaluate, which still answers. x and y are in the page's ${page.width}x${page.height} space; the screenshot is ${screenshot.width}x${screenshot.height}.`;
+
+export const PREVIEW_SNAPSHOT_NO_SCREENSHOT_NOTE =
+  "No screenshot, so no image is attached or saved: the screenshot was not ready in time. This usually means the T3 Code desktop window is minimized or fully covered, or the display is asleep, so the preview is not being painted; another snapshot right away will likely have none. Page text and element refs are current.";
 
 export const PreviewAutomationRecordingStatus = Schema.Struct({
   tabId: PreviewTabId,
