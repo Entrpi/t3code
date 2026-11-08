@@ -44,6 +44,14 @@ export class ServerBrowserOperationError extends Schema.TaggedError<ServerBrowse
 
 const isServerBrowserOperationError = Schema.is(ServerBrowserOperationError);
 
+/** The broker shows the agent a server-browser timeout's `detail.reason`, never its message. */
+const timedOut = (reason: string, timeoutMs: number) =>
+  new ServerBrowserOperationError({
+    tag: "PreviewAutomationTimeoutError",
+    message: reason,
+    detail: { reason, timeoutMs },
+  });
+
 export const toOperationError = (
   cause: unknown,
   timeoutMs?: number,
@@ -249,11 +257,10 @@ const pageChanged = () =>
   });
 
 const tooBusy = () =>
-  new ServerBrowserOperationError({
-    tag: "PreviewAutomationTimeoutError",
-    message:
-      "The page was too busy to capture a snapshot in time. Wait for it to settle and take another snapshot.",
-  });
+  timedOut(
+    "The page did not answer in time for a snapshot. If the next snapshot also fails, stop retrying; preview_evaluate may still be able to read your own tab.",
+    SNAPSHOT_TIMEOUT_MS,
+  );
 
 const VALUE_TOO_LONG = "A password field holds a value too long to hide, so no snapshot was taken.";
 
@@ -897,10 +904,10 @@ export const evaluate = async (
       // Stops a busy script; an awaited promise is abandoned and settles unread.
       void cdp.send("Runtime.terminateExecution").catch(constVoid);
       reject(
-        new ServerBrowserOperationError({
-          tag: "PreviewAutomationTimeoutError",
-          message: `Evaluation did not finish within ${timeoutMs}ms and was stopped.`,
-        }),
+        timedOut(
+          "The expression did not finish. A running script was told to stop; an awaited promise may still change the page.",
+          timeoutMs,
+        ),
       );
     }, timeoutMs);
   });
@@ -950,12 +957,7 @@ export const waitFor = async (page: Page, input: PreviewAutomationWaitForInput) 
   for (;;) {
     const results = await Promise.all(checks.map((check) => check()));
     if (results.every(Boolean)) return;
-    if (Date.now() >= deadline) {
-      throw new ServerBrowserOperationError({
-        tag: "PreviewAutomationTimeoutError",
-        message: `Waited ${timeoutMs}ms without every condition holding.`,
-      });
-    }
+    if (Date.now() >= deadline) throw timedOut("Not every condition was met in time.", timeoutMs);
     await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
   }
 };

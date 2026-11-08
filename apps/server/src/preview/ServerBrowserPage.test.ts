@@ -269,6 +269,31 @@ describe("server browser element refs", () => {
     await ServerBrowserPage.click(page, { selector: 'button[data-example=" >> aria-ref=e1"]' });
     expect(await page.locator("button").textContent()).toBe("saved");
   });
+
+  it("says why a page operation ran out of time and how long it had", async () => {
+    const timeout = (timeoutMs: number) => ({
+      tag: "PreviewAutomationTimeoutError",
+      detail: { reason: expect.any(String), timeoutMs },
+    });
+    await page.setContent("<button>go</button>");
+    await expect(
+      ServerBrowserPage.waitFor(page, { urlIncludes: "never-t3", timeoutMs: 0 }),
+    ).rejects.toMatchObject(timeout(0));
+    const unanswered = {
+      send: (method: string) =>
+        method === "Runtime.evaluate" ? new Promise(() => {}) : Promise.resolve({}),
+    } as unknown as CDPSession;
+    await expect(
+      ServerBrowserPage.evaluate(unanswered, { expression: "0" }, 1),
+    ).rejects.toMatchObject(timeout(1));
+    // A desktop tab whose accessibility tree never answers fails this way on every attempt.
+    Object.assign(page, {
+      ariaSnapshot: async () => {
+        throw Object.assign(new Error("Timeout exceeded."), { name: "TimeoutError" });
+      },
+    });
+    await expect(takeSnapshot()).rejects.toMatchObject(timeout(10_000));
+  });
 });
 
 describe("server browser snapshot screenshot", () => {
