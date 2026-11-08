@@ -31,7 +31,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
   createInboxReturnTracker,
-  isThreadWatchingPullRequests,
+  isThreadWaitingOnMonitors,
   isThreadWorking,
 } from "@t3tools/client-runtime/state/thread-inbox";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
@@ -329,7 +329,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
-const WATCHING_SHELF_EXPANDED_KEY = "t3code:sidebar:watching-expanded";
+const WAITING_SHELF_EXPANDED_KEY = "t3code:sidebar:waiting-expanded";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -462,8 +462,8 @@ function useSidebarThreads(input: {
     false,
     Schema.Boolean,
   );
-  const [watchingShelfExpanded, setWatchingShelfExpanded] = useLocalStorage(
-    WATCHING_SHELF_EXPANDED_KEY,
+  const [waitingShelfExpanded, setWaitingShelfExpanded] = useLocalStorage(
+    WAITING_SHELF_EXPANDED_KEY,
     false,
     Schema.Boolean,
   );
@@ -496,7 +496,7 @@ function useSidebarThreads(input: {
     pinnedThreads,
     activeThreads,
     workingThreads,
-    watchingThreads,
+    waitingThreads,
     snoozedThreads,
     settledThreads,
   } = partition;
@@ -532,9 +532,9 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
-  const visibleWatchingThreads = watchingShelfExpanded
-    ? watchingThreads
-    : routeThreadOnly(watchingThreads, routeRowThreadKey);
+  const visibleWaitingThreads = waitingShelfExpanded
+    ? waitingThreads
+    : routeThreadOnly(waitingThreads, routeRowThreadKey);
   const projectFolders =
     folderGroups === null
       ? null
@@ -561,7 +561,7 @@ function useSidebarThreads(input: {
       ? activeThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...visibleWorkingThreads,
-    ...visibleWatchingThreads,
+    ...visibleWaitingThreads,
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
   ];
@@ -570,7 +570,7 @@ function useSidebarThreads(input: {
     [pinnedThreads, "pinned"],
     [activeThreads, "active"],
     [workingThreads, "working"],
-    [watchingThreads, "watching"],
+    [waitingThreads, "waiting"],
     [snoozedThreads, "snoozed"],
     [settledThreads, "settled"],
   ] as const) {
@@ -584,7 +584,7 @@ function useSidebarThreads(input: {
       ...pinnedThreads,
       ...activeThreads,
       ...workingThreads,
-      ...watchingThreads,
+      ...waitingThreads,
       ...snoozedThreads,
       ...settledThreads,
     ],
@@ -603,8 +603,8 @@ function useSidebarThreads(input: {
     toggleSnoozedShelf: () => setSnoozedShelfExpanded((value) => !value),
     workingShelfExpanded,
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
-    watchingShelfExpanded,
-    toggleWatchingShelf: () => setWatchingShelfExpanded((value) => !value),
+    waitingShelfExpanded,
+    toggleWaitingShelf: () => setWaitingShelfExpanded((value) => !value),
     projectFolders,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
@@ -613,7 +613,7 @@ function useSidebarThreads(input: {
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
-    visibleWatchingThreads,
+    visibleWaitingThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
     settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
@@ -646,7 +646,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
   const working: EnvironmentThreadShell[] = [];
-  const watching: EnvironmentThreadShell[] = [];
+  const waiting: EnvironmentThreadShell[] = [];
   const inbox = (thread: EnvironmentThreadShell, manuallyMoved = false) => {
     if (
       !workingShelfEnabled ||
@@ -654,7 +654,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     ) {
       return active;
     }
-    return isThreadWatchingPullRequests(thread) ? watching : working;
+    return isThreadWaitingOnMonitors(thread) ? waiting : working;
   };
   const snoozed: EnvironmentThreadShell[] = [];
   const settled: EnvironmentThreadShell[] = [];
@@ -726,7 +726,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
             getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           }),
     workingThreads: sortWorkingThreadsBySend(working),
-    watchingThreads: sortWorkingThreadsBySend(watching),
+    waitingThreads: sortWorkingThreadsBySend(waiting),
     snoozedThreads: snoozed.toSorted(
       (left, right) =>
         firstValidTimestampMs(left.snoozedUntil ?? null) -
@@ -1321,7 +1321,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     activeReorderableThreadKeys,
     activeThreads,
     workingThreads,
-    watchingThreads,
+    waitingThreads,
     snoozedThreads,
     settledThreads,
     snoozeNow,
@@ -1337,14 +1337,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleSnoozedShelf,
     workingShelfExpanded,
     toggleWorkingShelf,
-    watchingShelfExpanded,
-    toggleWatchingShelf,
+    waitingShelfExpanded,
+    toggleWaitingShelf,
     projectFolders,
     toggleProjectFolder,
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
-    visibleWatchingThreads,
+    visibleWaitingThreads,
     orderedThreadKeys,
     threadByKey,
     settledThreadKeys,
@@ -1739,7 +1739,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const isContextDrag =
     dragState?.contextDrag === true ||
     dragState?.activeSection === "working" ||
-    dragState?.activeSection === "watching";
+    dragState?.activeSection === "waiting";
   const dragTargetSection = isContextDrag ? null : (dragState?.targetSection ?? null);
   const finishThreadDrag = (started: boolean) => {
     dragSensorRef.current = null;
@@ -1950,7 +1950,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       pinnedThreads.length +
         activeThreads.length +
         workingThreads.length +
-        watchingThreads.length +
+        waitingThreads.length +
         snoozedThreads.length +
         settledCount ===
         0
@@ -1968,9 +1968,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       items.push({ kind: "marker", marker: "working-header" });
       items.push(...rowsOf(visibleWorkingThreads, "working"));
     }
-    if (watchingThreads.length > 0) {
-      items.push({ kind: "marker", marker: "watching-header" });
-      items.push(...rowsOf(visibleWatchingThreads, "watching"));
+    if (waitingThreads.length > 0) {
+      items.push({ kind: "marker", marker: "waiting-header" });
+      items.push(...rowsOf(visibleWaitingThreads, "waiting"));
     }
     if (snoozedThreads.length > 0) {
       items.push({ kind: "marker", marker: "snoozed-header" });
@@ -2019,7 +2019,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const listMotionPass = { layoutKey: listMotionLayoutKey, animate: listMotionAnimate };
   const shelfExpansionKey = [
     workingShelfExpanded,
-    watchingShelfExpanded,
+    waitingShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
   ].join(":");
@@ -3356,7 +3356,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           section === "active" ||
                           section === "pinned" ||
                           section === "working" ||
-                          section === "watching";
+                          section === "waiting";
                         const rowVariant = folderRow
                           ? folderRowsMultiline
                             ? "folder-multiline"
@@ -3380,7 +3380,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
-                              section === "watching" ||
+                              section === "waiting" ||
                               section === "snoozed" ||
                               section === "settled"
                                 ? `shelf:${section}`
@@ -3567,17 +3567,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               />,
                             );
                             break;
-                          case "watching-header":
+                          case "waiting-header":
                             items.push(
                               <SidebarSectionHeader
-                                key="watching-shelf-header"
-                                marker="watching-header"
+                                key="waiting-shelf-header"
+                                marker="waiting-header"
                                 className={cn(workingThreads.length === 0 && "mt-auto")}
-                                label="Watching PRs"
-                                count={watchingThreads.length}
+                                label="Waiting"
+                                count={waitingThreads.length}
                                 toggle={{
-                                  expanded: watchingShelfExpanded,
-                                  onToggle: toggleWatchingShelf,
+                                  expanded: waitingShelfExpanded,
+                                  onToggle: toggleWaitingShelf,
                                 }}
                               />,
                             );
@@ -3588,7 +3588,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 key="snoozed-shelf-header"
                                 marker="snoozed-header"
                                 className={cn(
-                                  workingThreads.length + watchingThreads.length === 0 && "mt-auto",
+                                  workingThreads.length + waitingThreads.length === 0 && "mt-auto",
                                 )}
                                 label="Snoozed"
                                 count={snoozedThreads.length}
@@ -3606,7 +3606,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 marker="settled-header"
                                 className={cn(
                                   workingThreads.length +
-                                    watchingThreads.length +
+                                    waitingThreads.length +
                                     snoozedThreads.length ===
                                     0 && "mt-auto",
                                 )}
@@ -3677,7 +3677,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           pinnedThreads.length +
             activeThreads.length +
             workingThreads.length +
-            watchingThreads.length +
+            waitingThreads.length +
             snoozedThreads.length +
             settledCount ===
             0 ? (

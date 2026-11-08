@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   createInboxReturnTracker,
-  isThreadWatchingPullRequests,
+  isThreadWaitingOnMonitors,
   isThreadWorking,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
@@ -251,17 +251,20 @@ describe("sortWorkingThreadsBySend", () => {
   });
 });
 
-describe("isThreadWatchingPullRequests", () => {
+describe("isThreadWaitingOnMonitors", () => {
   const watch = {
     taskId: "pull-request-watch:github.com/acme/app#1",
     kind: "monitor" as const,
     awaited: true as const,
   };
+  const monitor = { taskId: "ci", kind: "monitor" as const, awaited: true as const };
   const parked = (
     status: "idle" | "running",
-    pendingBackgroundTasks: ReadonlyArray<
-      typeof watch | { taskId: string; kind: "subagent" | "command" }
-    >,
+    pendingBackgroundTasks: ReadonlyArray<{
+      taskId: string;
+      kind: "monitor" | "subagent" | "command";
+      awaited?: true;
+    }>,
   ) => ({
     runtime: {
       status,
@@ -274,19 +277,25 @@ describe("isThreadWatchingPullRequests", () => {
     pendingBackgroundTasks,
   });
 
-  it("holds a thread parked only on pull request watches", () => {
-    expect(isThreadWatchingPullRequests(parked("idle", [watch]))).toBe(true);
+  it("holds a thread parked only on monitors, pull request watches among them", () => {
+    expect(isThreadWaitingOnMonitors(parked("idle", [watch]))).toBe(true);
+    expect(isThreadWaitingOnMonitors(parked("idle", [watch, monitor]))).toBe(true);
     // A dev server the agent left running does not hold the thread, so it does not count.
     expect(
-      isThreadWatchingPullRequests(parked("idle", [watch, { taskId: "dev", kind: "command" }])),
+      isThreadWaitingOnMonitors(parked("idle", [watch, { taskId: "dev", kind: "command" }])),
     ).toBe(true);
   });
 
-  it("leaves threads that are running or waiting on other work as working", () => {
-    expect(isThreadWatchingPullRequests(parked("running", [watch]))).toBe(false);
+  it("leaves threads that are running or waiting on their own work as working", () => {
+    expect(isThreadWaitingOnMonitors(parked("running", [watch]))).toBe(false);
     expect(
-      isThreadWatchingPullRequests(parked("idle", [watch, { taskId: "child", kind: "subagent" }])),
+      isThreadWaitingOnMonitors(parked("idle", [watch, { taskId: "child", kind: "subagent" }])),
     ).toBe(false);
-    expect(isThreadWatchingPullRequests(parked("idle", []))).toBe(false);
+    expect(
+      isThreadWaitingOnMonitors(
+        parked("idle", [monitor, { taskId: "tests", kind: "command", awaited: true }]),
+      ),
+    ).toBe(false);
+    expect(isThreadWaitingOnMonitors(parked("idle", []))).toBe(false);
   });
 });

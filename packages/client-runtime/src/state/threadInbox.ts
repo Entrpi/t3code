@@ -1,8 +1,5 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
-import {
-  backgroundWorkHoldsCompletion,
-  isPullRequestWatchTask,
-} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
@@ -37,15 +34,18 @@ export function isThreadWorking(thread: WorkingThreadInput): boolean {
   return !(thread.interactionMode === "plan" && thread.hasActionableProposedPlan && runSettled);
 }
 
-/** For a working thread: parked between wakes with only pull request watches holding it. */
-export function isThreadWatchingPullRequests(
+/**
+ * For a working thread: parked between wakes with only monitors holding it, such as pull request
+ * watches. A subagent or an awaited command is the thread's own work still running.
+ */
+export function isThreadWaitingOnMonitors(
   thread: Pick<EnvironmentThreadShell, "runtime" | "pendingBackgroundTasks">,
 ): boolean {
   if (thread.runtime?.status !== "idle") return false;
   const holding = thread.pendingBackgroundTasks.filter((task) =>
     backgroundWorkHoldsCompletion([task]),
   );
-  return holding.length > 0 && holding.every(isPullRequestWatchTask);
+  return holding.length > 0 && holding.every((task) => task.kind === "monitor");
 }
 
 type InboxThreadInput = Pick<
