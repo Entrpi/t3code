@@ -35,6 +35,8 @@ const makeDebuggee = (
   options: {
     readonly deferFocus?: boolean;
     readonly refuse?: (method: string, sessionId: string | undefined) => boolean;
+    /** A guest whose first page has not committed yet, as at `did-attach-webview`. */
+    readonly firstPagePending?: boolean;
   } = {},
 ) => {
   const emitter = new NodeEvents.EventEmitter();
@@ -69,8 +71,12 @@ const makeDebuggee = (
         sendWaiters.shift()?.();
       }),
   });
+  let url = options.firstPagePending ? "" : "http://localhost/";
+  let loading = options.firstPagePending === true;
   const webContents = Object.assign(new NodeEvents.EventEmitter(), {
-    getURL: () => "http://localhost/",
+    isDestroyed: () => false,
+    isLoadingMainFrame: () => loading,
+    getURL: () => url,
     getTitle: () => "Page",
     getUserAgent: () => "Electron",
   });
@@ -81,6 +87,14 @@ const makeDebuggee = (
     },
     emit: (method: string, params: unknown) => emitter.emit("message", {}, method, params, ""),
     navigate: () => webContents.emit("did-navigate"),
+    pageReady: () => {
+      url = "about:blank";
+      webContents.emit("dom-ready");
+    },
+    loadEndsWithoutPage: () => {
+      loading = false;
+      webContents.emit("did-stop-loading");
+    },
     /** Ids of the commands the debugger received, in order. */
     sent,
     focusEmulation,
@@ -178,6 +192,42 @@ describe("DesktopBrowserHost", () => {
         { type: "attached", ...key },
         { type: "shown", ...key, shown: false },
         { type: "attached", ...other },
+      ]);
+    }),
+  );
+
+  it.effect("announces a new guest only once its first page is up, or once it stops waiting", () =>
+    Effect.gen(function* () {
+      const host = yield* DesktopBrowserHost.make;
+      const tab = (tabId: string) => ({ ...key, tabId });
+      const loading = makeDebuggee({ firstPagePending: true });
+      const pageless = makeDebuggee({ firstPagePending: true });
+      const stopped = makeDebuggee({ firstPagePending: true });
+      const replaced = makeDebuggee({ firstPagePending: true });
+      const replacement = makeDebuggee({ firstPagePending: true });
+      stopped.loadEndsWithoutPage();
+      host.attach(key, loading.tab);
+      const reader = yield* takeEvents(host, 6).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      host.attach(tab("pageless"), pageless.tab);
+      host.attach(tab("stalled"), makeDebuggee({ firstPagePending: true }).tab);
+      host.attach(tab("stopped"), stopped.tab);
+      host.attach(tab("replaced"), replaced.tab);
+      host.attach(tab("replaced"), replacement.tab);
+      replaced.pageReady();
+      loading.pageReady();
+      pageless.loadEndsWithoutPage();
+      replacement.pageReady();
+      yield* TestClock.adjust("5 seconds");
+
+      expect(yield* Fiber.join(reader)).toEqual([
+        { type: "attached", ...tab("stopped") },
+        { type: "detached", ...tab("replaced") },
+        { type: "attached", ...key },
+        { type: "attached", ...tab("pageless") },
+        { type: "attached", ...tab("replaced") },
+        { type: "attached", ...tab("stalled") },
       ]);
     }),
   );

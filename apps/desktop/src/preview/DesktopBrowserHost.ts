@@ -26,6 +26,9 @@ const AGENT_INPUT_COMMAND =
 const AGENT_INPUT_METHOD = /^(?:Input\.|Page\.navigate$|Runtime\.(?:evaluate|callFunctionOn)$)/;
 const AGENT_DOWNLOAD_WINDOW_MS = 5_000;
 const FOCUS_IDLE = "5 seconds";
+// The server's 10 s DESKTOP_ATTACH_TIMEOUT starts before the webview mounts, and a tab that
+// misses it runs headless for good; this leaves mounting and registration about 5 s of it.
+const FIRST_PAGE_WAIT = "5 seconds";
 
 export interface DesktopBrowserTabKey {
   readonly threadId: string;
@@ -69,6 +72,7 @@ interface AttachedTab {
    */
   agentUsed: boolean;
   focusReleasing: boolean;
+  announced: boolean;
   /** The sessions streaming the guest; one stopping leaves the others' screencasts running. */
   readonly screencasts: Set<string | undefined>;
   readonly onMessage: (
@@ -408,6 +412,34 @@ export const make = Effect.gen(function* () {
     return true;
   };
 
+  const announce = (tab: AttachedTab) => {
+    if (tab.announced || tabs.get(keyOf(tab.key)) !== tab) return;
+    tab.announced = true;
+    emit({ type: "attached", ...tab.key });
+    const shown = shownTabs.get(keyOf(tab.key));
+    if (shown !== undefined) emit({ type: "shown", ...tab.key, shown });
+  };
+
+  /**
+   * Playwright that connects while a guest commits its first page sets up only the blank
+   * page being replaced: the new page never gets Playwright's utility world, so locators,
+   * snapshots and waits never answer, or the connect fails outright.
+   */
+  const announceOnFirstPage = (tab: AttachedTab) => {
+    const { webContents } = tab.debuggee;
+    const blank =
+      !webContents.isDestroyed() && webContents.getURL() === "" && webContents.isLoadingMainFrame();
+    if (!blank) return announce(tab);
+    const settled = () => {
+      webContents.off("dom-ready", settled);
+      webContents.off("did-stop-loading", settled);
+      announce(tab);
+    };
+    webContents.on("dom-ready", settled);
+    webContents.on("did-stop-loading", settled);
+    runFork(Effect.sleep(FIRST_PAGE_WAIT).pipe(Effect.andThen(Effect.sync(settled))));
+  };
+
   const detach = (key: DesktopBrowserTabKey) => {
     const id = keyOf(key);
     const tab = tabs.get(id);
@@ -440,6 +472,7 @@ export const make = Effect.gen(function* () {
       painting: false,
       agentUsed: false,
       focusReleasing: false,
+      announced: false,
       screencasts: new Set(),
       onMessage: (_event, method, params, sessionId) => {
         if (method === "Page.downloadWillBegin") {
@@ -459,9 +492,7 @@ export const make = Effect.gen(function* () {
     tabs.set(id, tab);
     debuggee.debugger.on("message", tab.onMessage);
     debuggee.webContents.on("did-navigate", tab.onNewDocument);
-    emit({ type: "attached", ...key });
-    const shown = shownTabs.get(id);
-    if (shown !== undefined) emit({ type: "shown", ...key, shown });
+    announceOnFirstPage(tab);
   };
 
   const setShown = (key: DesktopBrowserTabKey, shown: boolean | undefined) => {
@@ -511,6 +542,7 @@ export const make = Effect.gen(function* () {
       [...tabs.values()],
       (tab) => {
         dropRelay(tab);
+        if (!tab.announced) return Effect.void;
         const shown = shownTabs.get(keyOf(tab.key));
         return PubSub.publish(outbox, { type: "attached", ...tab.key }).pipe(
           Effect.andThen(
