@@ -304,7 +304,9 @@ export const McpToolUseCase = Schema.Struct({
     world: Schema.optional(McpToolUseWorld),
     /**
      * Canned tool results by bare name, T3 or native. `"default"` uses the runner's result. For a
-     * device tool, a T3 `DeviceError` (`{"_tag": ..., "cause": null}`) fails it inside T3.
+     * device tool, a T3 `DeviceError` (`{"_tag": ..., "cause": null}`) fails it inside T3. A preview
+     * `{"error": {"_tag": ...}}` with no `message` gets the text of that contracts error class; the
+     * mock must carry every field that text reads, and the result keeps only the fields T3 sends.
      */
     mocks: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
     /** Regexes on one part of a shell command. A match wins over the shell simulator. */
@@ -1282,6 +1284,28 @@ const unsavedSecretNote = (Contracts as Record<string, unknown>).SECRET_REQUEST_
   | Readonly<Record<string, string>>
   | undefined;
 
+const withPreviewErrorMessage = (value: Record<string, unknown>) => {
+  const error = value.error;
+  if (!isRecord(error) || error.message !== undefined || typeof error._tag !== "string")
+    return value;
+  const errorClass = (Contracts as Record<string, unknown>)[error._tag];
+  if (typeof errorClass !== "function") return value;
+  const message: unknown = Reflect.get(errorClass.prototype as object, "message", error);
+  if (typeof message !== "string") return value;
+  if (message.includes("undefined"))
+    throw new Error(`Mock ${error._tag} lacks a field its message reads: ${message}`);
+  // The shape McpHttpServer sends for a failed preview tool; fields such as `reason` stay out.
+  return {
+    ...value,
+    error: {
+      _tag: error._tag,
+      operation: error.operation,
+      failureCount: error.failureCount ?? 1,
+      message,
+    },
+  };
+};
+
 /** Fields T3 adds to real thread and task results, applied to mocks and defaults alike. */
 const withProductFields = (name: string, value: unknown, child: boolean): unknown => {
   if (!isRecord(value)) return value;
@@ -1326,7 +1350,9 @@ const withProductFields = (name: string, value: unknown, child: boolean): unknow
     case "link_pull_requests":
       return child ? { ...value, next: CHILD_PULL_REQUEST_REPORT_NEXT } : value;
     default:
-      return value;
+      return name.startsWith("preview_") || name.startsWith("t3_preview_")
+        ? withPreviewErrorMessage(value)
+        : value;
   }
 };
 

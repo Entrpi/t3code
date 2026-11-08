@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
@@ -336,12 +336,80 @@ describe("SessionControl", () => {
     const closed = control.close();
     await expect(control.take("viewer")).rejects.toThrow("closed");
     await expect(control.agent("agent", async () => "new")).rejects.toThrow("closed");
+    await expect(control.system(async () => {})).rejects.toThrow("closed");
     finish.resolve();
     await expect(running).resolves.toBe("finished");
     await Promise.all([queued, closed]);
     await control.disconnect("viewer");
     await control.close();
     expect(control.generation).toBe(1);
+  });
+
+  it("answers a stuck action and the work queued behind it by their deadlines, refuses new agent work until it settles, and never starts expired work", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const control = new SessionControl("agent");
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<string>();
+      const events: string[] = [];
+      const outcomes: unknown[] = [];
+      const stuck = control.agent(
+        "agent",
+        () => {
+          events.push("stuck");
+          started.resolve();
+          return finish.promise;
+        },
+        1_000,
+      );
+      const queued = control.agent(
+        "agent",
+        async () => {
+          events.push("queued");
+        },
+        1_000,
+      );
+      const late = control.agent(
+        "agent",
+        async () => {
+          events.push("late");
+        },
+        1_000,
+        { mayStartLate: true },
+      );
+      for (const outcome of [stuck, queued, late]) {
+        void outcome.then(
+          (value) => outcomes.push(value),
+          (cause: unknown) => outcomes.push(cause),
+        );
+      }
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(outcomes).toEqual([
+        expect.objectContaining({ name: "TimeoutError" }),
+        expect.objectContaining({ name: "TimeoutError" }),
+        expect.objectContaining({ name: "TimeoutError" }),
+      ]);
+      await expect(control.agent("agent", async () => "new", 10_000)).rejects.toMatchObject({
+        reason: "busy",
+      });
+      const stop = control.agent(
+        "agent",
+        async () => {
+          events.push("stop");
+        },
+        10_000,
+        { mayStartLate: true },
+      );
+      expect(events).toEqual(["stuck"]);
+      finish.resolve("late");
+      await stop;
+      await control.system(async () => {});
+      await expect(control.agent("agent", async () => "fresh", 10_000)).resolves.toBe("fresh");
+      expect(events).toEqual(["stuck", "late", "stop"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lets any agent act on a tab no agent opened, but only while no human controls it", async () => {

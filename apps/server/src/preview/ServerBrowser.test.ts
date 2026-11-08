@@ -973,6 +973,18 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
         _tag: "PreviewAutomationControlInterruptedError",
         reason: "dialogPending",
       });
+      const queued = yield* broker
+        .invoke<void>({
+          scope,
+          tabId,
+          operation: "navigate",
+          input: { url: "http://localhost:5173/other" },
+        })
+        .pipe(Effect.flip);
+      expect(queued).toMatchObject({
+        _tag: "PreviewAutomationControlInterruptedError",
+        reason: "dialogPending",
+      });
       expect(page.goto).toHaveBeenCalledTimes(1);
       yield* broker.invoke({ scope, tabId, operation: "dialog", input: { accept: true } });
       expect(yield* Fiber.join(blockedAction)).toBe(true);
@@ -984,6 +996,34 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
         input: {},
       });
       expect(resolved.dialog).toBeNull();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a setting change that never applies on one tab does not hold back another tab's", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const other = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const entered = Promise.withResolvers<void>();
+      const stuck = Promise.withResolvers<void>();
+      const applied = Promise.withResolvers<void>();
+      yield* Effect.addFinalizer(() => Effect.sync(() => stuck.resolve()));
+      contexts[0]!.page.emulateMedia.mockImplementationOnce(() => {
+        entered.resolve();
+        return stuck.promise;
+      });
+      contexts[1]!.page.emulateMedia.mockImplementationOnce(async () => applied.resolve());
+      const threadId = scope.thread.threadId;
+      yield* manager.adjust({ threadId, tabId, colorScheme: "dark" });
+      yield* Effect.promise(() => entered.promise);
+      yield* manager.adjust({ threadId, tabId: other.tabId!, colorScheme: "dark" });
+      yield* Effect.promise(() => applied.promise);
     }),
   ).pipe(Effect.provide(layer)),
 );

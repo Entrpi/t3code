@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - The per-tab queue runs Playwright promises outside the Effect runtime.
 import { PreviewAutomationControlReason } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -15,6 +16,9 @@ export class BrowserControlInterrupted extends Schema.TaggedError<BrowserControl
     ),
   },
 ) {}
+
+// Lets a run's own timeout error arrive first; must stay under the broker's 1 s response grace.
+const OVERDUE_GRACE_MS = 500;
 
 const settle = (work: Promise<unknown>) =>
   work.then(
@@ -36,6 +40,7 @@ export class SessionControl {
   private owner: string | null = null;
   private epoch = 0;
   private closed = false;
+  private stalled = false;
 
   constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
     this.agentId = agentId;
@@ -88,29 +93,65 @@ export class SessionControl {
     this.onGenerationChange();
   }
 
-  private async action<A>(allowed: () => boolean, run: () => Promise<A>, deadlineMs?: number) {
+  private async action<A>(
+    allowed: () => boolean,
+    run: () => Promise<A>,
+    deadlineMs?: number,
+    mayStartLate = false,
+  ) {
     this.assertOpen();
     if (!allowed())
       throw new BrowserControlInterrupted({ message: "You do not control this browser tab." });
     const epoch = this.epoch;
-    return this.enqueue(async () => {
+    let started = false;
+    const result = this.enqueue(async () => {
       this.assertOpen();
       if (epoch !== this.epoch || !allowed()) throw new BrowserControlInterrupted();
-      if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
+      if (deadlineMs !== undefined && !mayStartLate && performance.now() >= deadlineMs) {
         throw new DOMException(
           "This browser request expired before it could start.",
           "TimeoutError",
         );
       }
+      started = true;
       return run();
     });
+    if (deadlineMs === undefined) return result;
+    // The caller is answered by its deadline; the queue still waits for the run itself.
+    const answered = Promise.withResolvers<A>();
+    const timer = setTimeout(
+      () => {
+        if (started) {
+          this.stalled = true;
+          void settle(result).then(() => {
+            this.stalled = false;
+          });
+        }
+        answered.reject(
+          new DOMException(
+            started
+              ? "This browser action did not finish before its deadline."
+              : "This browser request did not start before its deadline.",
+            "TimeoutError",
+          ),
+        );
+      },
+      Math.max(0, deadlineMs - performance.now()) + OVERDUE_GRACE_MS,
+    );
+    void result.then(answered.resolve, answered.reject).finally(() => clearTimeout(timer));
+    return answered.promise;
   }
 
   agentMayAct(agentId: string) {
     return this.agentId === null || this.agentId === agentId;
   }
 
-  agent<A>(agentId: string, run: () => Promise<A>, deadlineMs?: number) {
+  agent<A>(
+    agentId: string,
+    run: () => Promise<A>,
+    deadlineMs?: number,
+    options?: { readonly mayStartLate?: boolean },
+  ) {
     if (!this.agentMayAct(agentId))
       return Promise.reject(
         new BrowserControlInterrupted({
@@ -125,7 +166,20 @@ export class SessionControl {
           reason: "humanControl",
         }),
       );
-    return this.action(() => this.agentMayAct(agentId) && this.owner === null, run, deadlineMs);
+    // A late-start stop still queues while stalled, so capture is never left running.
+    if (this.stalled && !this.closed && !options?.mayStartLate)
+      return Promise.reject(
+        new BrowserControlInterrupted({
+          message: "An earlier action on this browser tab is still running after its timeout.",
+          reason: "busy",
+        }),
+      );
+    return this.action(
+      () => this.agentMayAct(agentId) && this.owner === null,
+      run,
+      deadlineMs,
+      options?.mayStartLate,
+    );
   }
 
   agentCanActNow(agentId: string) {
@@ -138,7 +192,7 @@ export class SessionControl {
     return run();
   }
 
-  system<A>(run: () => Promise<A>) {
+  async system<A>(run: () => Promise<A>) {
     this.assertOpen();
     return this.enqueue(async () => {
       this.assertOpen();

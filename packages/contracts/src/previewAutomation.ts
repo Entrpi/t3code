@@ -792,6 +792,7 @@ export const PreviewAutomationControlReason = Schema.Literals([
   "interrupted",
   "dialogPending",
   "tabLimit",
+  "busy",
 ]);
 export type PreviewAutomationControlReason = typeof PreviewAutomationControlReason.Type;
 
@@ -814,6 +815,8 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
       return "A browser dialog is pending. Read preview_status and resolve it with preview_dialog.";
     if (this.reason === "tabLimit")
       return "Too many server browser tabs are open. Close one with t3_preview_close, or reuse a tabId from preview_status tabs.";
+    if (this.reason === "busy")
+      return "An earlier action on this browser tab is still running past its timeout, so the tab takes no new agent actions yet. It may still finish: wait a few seconds and retry once. If it is still busy, continue in a new tab with preview_open and reuseExistingTab false, and close this one with t3_preview_close if it is your tab.";
     if (this.reason === "closed") return "This browser tab is closed. Call preview_open.";
     if (this.reason === "interrupted")
       return "Browser control changed. Take a fresh snapshot before trying again.";

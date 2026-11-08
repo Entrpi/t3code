@@ -2131,7 +2131,14 @@ const make = Effect.gen(function* () {
         }
         // A stop cannot act twice (a retry finds no recording);
         // dropping a late one would leave capture running.
-        return tab.control.agent(request.agentSessionId ?? "", () => stopRecording(tab));
+        return tab.control.agent(
+          request.agentSessionId ?? "",
+          () => stopRecording(tab),
+          deadlineMs,
+          {
+            mayStartLate: true,
+          },
+        );
       }
     }
     const tab = await requireTab(request);
@@ -2178,6 +2185,11 @@ const make = Effect.gen(function* () {
         return executeTabOperation(tab, request);
       });
     }
+    if (tab.dialog && tab.control.agentCanActNow(agentSessionId))
+      throw new BrowserControlInterrupted({
+        message: "A browser dialog is pending. Read preview_status and use preview_dialog first.",
+        reason: "dialogPending",
+      });
     return tab.control.agent(
       agentSessionId,
       async () => {
@@ -2345,7 +2357,8 @@ const make = Effect.gen(function* () {
         return;
       }
       if (event.type === "resized") {
-        await tab.control
+        // Not awaited: one tab whose queue never drains must not stop every other tab's events.
+        void tab.control
           .system(async () => {
             if (
               !viewportSettingsEqual(event.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT, tab.setting)
