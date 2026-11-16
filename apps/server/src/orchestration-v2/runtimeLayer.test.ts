@@ -7007,7 +7007,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       }),
   );
 
-  it.effect("rejects settling a thread while a run is active", () =>
+  it.effect("rejects settling or archiving a thread while a run is active", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-active-settle-thread");
@@ -7065,8 +7065,21 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
 
       assert.equal(error._tag, "OrchestratorDispatchError");
       assert.equal(error.cause, `Thread ${threadId} is still running. Stop it before settling.`);
+      const archiveError = yield* orchestrator
+        .dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("runtime-layer-active-archive"),
+          threadId,
+        })
+        .pipe(Effect.flip);
+      assert.equal(archiveError._tag, "OrchestratorDispatchError");
+      assert.equal(
+        archiveError.cause,
+        `Thread ${threadId} is still running. Stop it before archiving.`,
+      );
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(projection.runs[0]?.status, "starting");
+      assert.isNull(projection.thread.archivedAt);
       assert.isNull(projection.thread.settledOverride);
       assert.isNull(projection.thread.settledAt);
       assert.isNotNull(projection.thread.unsettledAt);
@@ -7391,6 +7404,20 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         .pipe(Effect.flip);
       assert.equal(staleSettle._tag, "OrchestratorDispatchError");
       assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.settledAt);
+      const staleArchive = yield* orchestrator
+        .dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("settle-automatic-stale-archive"),
+          threadId,
+          expectedLatestRunId: oldestRun.id,
+        })
+        .pipe(Effect.flip);
+      assert.equal(staleArchive._tag, "OrchestratorDispatchError");
+      assert.equal(
+        staleArchive.cause,
+        `Thread ${threadId} changed since you read it. Read it again before closing it.`,
+      );
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.archivedAt);
 
       yield* orchestrator.dispatch({
         type: "thread.settle",
@@ -7440,6 +7467,17 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.deepEqual(
         blocked.runs.filter((run) => run.status === "queued").map((run) => run.userMessageId),
         ["settle-automatic-user-queued", "settle-automatic-agent-queued-2"],
+      );
+      const archiveError = yield* orchestrator
+        .dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("settle-automatic-archive-2"),
+          threadId,
+        })
+        .pipe(Effect.flip);
+      assert.equal(
+        archiveError.cause,
+        `Thread ${threadId} has a queued message. Send it or remove it from the queue before archiving.`,
       );
     }),
   );
@@ -7565,7 +7603,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("cancels preparing work on archive and keeps it cancelled through replay", () =>
+  it.effect("archives preparing work only after Stop, and the stop holds through replay", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const maintenance = yield* ProjectionReplay.ProjectionReplay;
@@ -7605,6 +7643,19 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(preparation.status, "running");
       assert.isEmpty((yield* orchestrator.getThreadShell(threadId))!.pendingBackgroundTasks);
 
+      const refused = yield* orchestrator
+        .dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("archive-preparing-refused"),
+          threadId,
+        })
+        .pipe(Effect.flip);
+      assert.equal(refused.cause, `Thread ${threadId} is still running. Stop it before archiving.`);
+      yield* orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: CommandId.make("archive-preparing-stop"),
+        threadId,
+      });
       const archive = {
         type: "thread.archive" as const,
         commandId: CommandId.make("archive-preparing-archive"),
@@ -7615,19 +7666,16 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
 
       const assertCancelled = Effect.gen(function* () {
         const projection = yield* orchestrator.getThreadProjection(threadId);
-        const cancelledRun = projection.runs.find((candidate) => candidate.id === run.id)!;
-        assert.equal(cancelledRun.status, "cancelled");
-        assert.isNull(cancelledRun.queuePosition);
-        assert.isNotNull(cancelledRun.completedAt);
-        assert.equal(projection.attempts[0]?.status, "cancelled");
+        const stoppedRun = projection.runs.find((candidate) => candidate.id === run.id)!;
+        assert.equal(stoppedRun.status, "interrupted");
+        assert.isNull(stoppedRun.queuePosition);
+        assert.isNotNull(stoppedRun.completedAt);
+        assert.equal(projection.attempts[0]?.status, "interrupted");
         assert.isNotNull(projection.attempts[0]?.completedAt);
-        assert.equal(projection.nodes[0]?.status, "cancelled");
-        assert.isNotNull(projection.nodes[0]?.completedAt);
         const item = projection.turnItems.find((candidate) => candidate.id === preparation.id)!;
-        assert.equal(item.status, "cancelled");
-        assert.equal(item.title, "Workspace preparation cancelled");
-        assert.deepEqual(item.completedAt, cancelledRun.completedAt);
-        assert.deepEqual(item.updatedAt, cancelledRun.completedAt);
+        assert.equal(item.status, "interrupted");
+        assert.equal(item.title, "Workspace preparation interrupted");
+        assert.deepEqual(item.completedAt, stoppedRun.completedAt);
         assert.isEmpty((yield* orchestrator.getThreadShell(threadId))!.pendingBackgroundTasks);
         assert.equal(yield* orchestrator.resumeQueuedRuns, 0);
       });

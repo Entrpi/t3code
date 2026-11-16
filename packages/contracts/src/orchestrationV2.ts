@@ -3146,6 +3146,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.archive"),
     commandId: CommandId,
     threadId: ThreadId,
+    expectedLatestRunId: Schema.optional(RunId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.close"),

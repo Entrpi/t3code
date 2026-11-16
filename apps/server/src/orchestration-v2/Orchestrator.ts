@@ -4338,7 +4338,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
-    if (command.type === "thread.settle") {
+    // Settle and archive close a thread, so both refuse one that is still in use.
+    if (command.type === "thread.settle" || command.type === "thread.archive") {
+      const verb = command.type === "thread.settle" ? "settling" : "archiving";
       const projection = yield* loadProjectionForCommand(command, ["runs", "runtimeRequests"]);
       if (
         command.expectedLatestRunId !== undefined &&
@@ -4350,7 +4352,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
-          cause: "The thread received another run before settlement.",
+          cause: `Thread ${command.threadId} changed since you read it. Read it again before closing it.`,
         });
       }
       const queuedMessages = yield* projectionStore
@@ -4387,11 +4389,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (request) => request.kind !== "user_input" || request.responseCapability.type !== "message",
       );
       const blocker = blockingRequestExists
-        ? "is waiting on an approval or question. Answer it before settling."
+        ? `is waiting on an approval or question. Answer it before ${verb}.`
         : runningRunExists
-          ? "is still running. Stop it before settling."
+          ? `is still running. Stop it before ${verb}.`
           : queuedMessageExists
-            ? "has a queued message. Send it or remove it from the queue before settling."
+            ? `has a queued message. Send it or remove it from the queue before ${verb}.`
             : null;
       if (blocker !== null) {
         return yield* new OrchestratorDispatchError({
@@ -4401,30 +4403,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
 
-      for (const request of pendingRequests) {
-        yield* dispatchRuntimeRequestRespond(
-          {
-            type: "runtime-request.respond",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            requestId: request.id,
-            decision: "cancel",
-          },
-          events,
-          effects,
-        );
-      }
-      for (const run of automaticQueuedRuns) {
-        yield* dispatchQueuedRunCancel(
-          {
-            type: "queued-run.cancel",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            runId: run.id,
-          },
-          events,
-          "cohort",
-        );
+      if (command.type === "thread.settle") {
+        for (const request of pendingRequests) {
+          yield* dispatchRuntimeRequestRespond(
+            {
+              type: "runtime-request.respond",
+              commandId: command.commandId,
+              threadId: command.threadId,
+              requestId: request.id,
+              decision: "cancel",
+            },
+            events,
+            effects,
+          );
+        }
+        for (const run of automaticQueuedRuns) {
+          yield* dispatchQueuedRunCancel(
+            {
+              type: "queued-run.cancel",
+              commandId: command.commandId,
+              threadId: command.threadId,
+              runId: run.id,
+            },
+            events,
+            "cohort",
+          );
+        }
       }
     }
 
@@ -5364,19 +5368,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         { turnItemTypes: [], messageRoles: ["user"] },
       );
       const emitEvent = emit(events, command);
+      // The close check refused active runs, so only automatic queued runs remain.
       const activeRunIds = new Set(
-        projection.runs
-          .filter((run) => run.status === "queued" || run.status === "preparing")
-          .map((run) => run.id),
+        projection.runs.filter((run) => run.status === "queued").map((run) => run.id),
       );
-      const preparingRuns = projection.runs.filter((run) => run.status === "preparing");
-      const preparationItems =
-        preparingRuns.length === 0
-          ? []
-          : (yield* loadProjectionForCommand(command, ["turnItems"], {
-              turnItemTypes: ["command_execution"],
-              turnItemRunIds: preparingRuns.map((run) => run.id),
-            })).turnItems;
       for (const run of projection.runs.filter((candidate) => activeRunIds.has(candidate.id))) {
         yield* emitEvent({
           type: "run.updated",
@@ -5385,31 +5380,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerInstanceId: run.providerInstanceId,
           occurredAt: now,
           payload: { ...run, status: "cancelled", queuePosition: null, completedAt: now },
-        });
-      }
-      for (const run of preparingRuns) {
-        const preparationItem = preparationItems.find(
-          (item) =>
-            item.runId === run.id &&
-            item.type === "command_execution" &&
-            item.input === WORKSPACE_PREPARATION_INPUT &&
-            item.status === "running",
-        );
-        if (preparationItem === undefined) continue;
-        yield* emitEvent({
-          type: "turn-item.updated",
-          threadId: command.threadId,
-          runId: run.id,
-          nodeId: preparationItem.nodeId ?? undefined,
-          providerInstanceId: run.providerInstanceId,
-          occurredAt: now,
-          payload: {
-            ...preparationItem,
-            status: "cancelled",
-            title: "Workspace preparation cancelled",
-            completedAt: now,
-            updatedAt: now,
-          },
         });
       }
       for (const attempt of projection.attempts.filter(

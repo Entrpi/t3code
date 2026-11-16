@@ -896,6 +896,17 @@ it.effect(
       yield* sql`DELETE FROM orchestration_v2_projection_nodes WHERE node_id = 'obsolete-task'`;
       yield* sql`DELETE FROM orchestration_v2_projection_provider_threads
         WHERE provider_thread_id = 'obsolete-task-thread'`;
+      // Archive refuses a thread with a run in progress, so the deferred run ends first.
+      for (const run of (yield* projections.getThreadRecords(threadId, ["runs"])).runs) {
+        yield* projections.apply({
+          id: EventId.make(`end-with-old-history:${run.id}`),
+          type: "run.updated",
+          threadId,
+          runId: run.id,
+          occurredAt: now,
+          payload: { ...run, status: "cancelled", queuePosition: null, completedAt: now },
+        });
+      }
       yield* orchestrator.dispatch({
         type: "thread.archive",
         commandId: CommandId.make("archive-with-old-history"),
