@@ -17,6 +17,8 @@ repository root and retain its terminal session. Use the worktree's ignored
 `.t3` state and read the actual ports and pairing URL from the dev-runner output.
 Never run against `~/.t3/userdata` or set `VITE_HTTP_URL` or `VITE_WS_URL`.
 
+For every desktop check, set `T3CODE_DESKTOP_ISOLATED=1` to use a mock keychain and a profile inside the run’s base folder; add `T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT` to inspect the window through the debugging protocol.
+
 Test with meaningful project and thread data. Read
 [references/sqlite-fixtures.md](references/sqlite-fixtures.md) only when
 inspecting or seeding SQLite. Stop the test server before direct fixture writes.

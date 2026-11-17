@@ -91,6 +91,14 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(web.T3CODE_DEV_AUTH_TOKEN, input.baseEnv.T3CODE_DEV_AUTH_TOKEN);
         assert.equal(desktop.T3CODE_DEV_AUTH_TOKEN, undefined);
+        const isolated = yield* createDevRunnerEnv({
+          ...input,
+          mode: "dev:desktop",
+          t3Home: "/tmp/isolated-desktop",
+          baseEnv: { T3CODE_DESKTOP_ISOLATED: "1" },
+        });
+        assert.equal(isolated.T3CODE_HOME, "/tmp/isolated-desktop");
+        assert.equal(isolated.T3CODE_DESKTOP_ISOLATED, "1");
       }),
     );
 

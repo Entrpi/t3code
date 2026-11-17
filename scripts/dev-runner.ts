@@ -329,7 +329,10 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
       `http://${isDesktopMode ? DESKTOP_DEV_LOOPBACK_HOST : "localhost"}:${webPort}`,
   };
 
-  if (configuredBaseDir !== undefined) {
+  if (
+    configuredBaseDir !== undefined ||
+    (isDesktopMode && baseEnv.T3CODE_DESKTOP_ISOLATED === "1")
+  ) {
     output.T3CODE_HOME = resolvedBaseDir;
   } else {
     delete output.T3CODE_HOME;

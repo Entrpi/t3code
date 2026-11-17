@@ -114,6 +114,9 @@ function startApp() {
   const electronArgs = remoteDebuggingPort
     ? [`--remote-debugging-port=${remoteDebuggingPort}`]
     : [];
+  if (process.env.T3CODE_DESKTOP_ISOLATED === "1") {
+    electronArgs.push("--use-mock-keychain");
+  }
   const launchArgs = devProtocolClient
     ? electronArgs
     : [...electronArgs, `--t3code-dev-root=${desktopDir}`, "dist-electron/main.cjs"];

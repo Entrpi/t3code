@@ -36,9 +36,13 @@ export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPa
     readonly appDataDirectory: string;
     readonly isDevelopment: boolean;
     readonly platform: NodeJS.Platform;
+    readonly isolatedBaseDirectory?: string;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    if (input.isDevelopment && input.isolatedBaseDirectory) {
+      return path.join(input.isolatedBaseDirectory, "desktop-user-data");
+    }
     const names = input.isDevelopment
       ? { current: "t3code-dev", legacy: "T3 Code (Dev)" }
       : { current: "t3code-v2", legacy: "T3 Code (Alpha)" };

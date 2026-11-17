@@ -73,3 +73,22 @@ describe("DesktopEnvironment", () => {
     }),
   );
 });
+
+it.effect.each([
+  { isPackaged: false, devUrl: "http://localhost:5173", isolated: "1", expected: "/run" },
+  { isPackaged: true, devUrl: "http://localhost:5173", isolated: "1", expected: undefined },
+  { isPackaged: false, devUrl: undefined, isolated: "1", expected: undefined },
+  { isPackaged: false, devUrl: "http://localhost:5173", isolated: "0", expected: undefined },
+])("isolates only opted-in unpackaged dev runs ($isPackaged, $devUrl, $isolated)", (row) =>
+  Effect.gen(function* () {
+    const environment = yield* makeEnvironment(
+      { isPackaged: row.isPackaged },
+      {
+        VITE_DEV_SERVER_URL: row.devUrl,
+        T3CODE_HOME: "/run",
+        T3CODE_DESKTOP_ISOLATED: row.isolated,
+      },
+    );
+    assert.equal(environment.isolatedBaseDirectory, row.expected);
+  }),
+);

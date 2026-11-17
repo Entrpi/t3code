@@ -21,6 +21,7 @@ describe("electron development launcher", () => {
       VITE_DEV_SERVER_URL: "http://127.0.0.1:8526",
       T3CODE_PORT: "16566",
       T3CODE_HOME: "/tmp/t3",
+      T3CODE_DESKTOP_ISOLATED: "1",
       T3CODE_OTLP_PROTOCOL: "http/protobuf",
     });
 
@@ -32,6 +33,7 @@ describe("electron development launcher", () => {
       environmentScript,
       "if [ -z \"${T3CODE_OTLP_PROTOCOL:-}\" ]; then export T3CODE_OTLP_PROTOCOL='http/protobuf'; fi",
     );
+    assert.include(environmentScript, "export T3CODE_DESKTOP_ISOLATED='1'");
     assert.notInclude(environmentScript, "\nexport VITE_DEV_SERVER_URL=");
   });
 
@@ -306,3 +308,54 @@ it
     );
   }
 });
+
+it.each([undefined, "0", "1"])(
+  "dev launch isolates keychain only when opted in (%s)",
+  async (isolated) => {
+    let launchArgs;
+    await runDevElectronStartup({
+      process: {
+        env: { VITE_DEV_SERVER_URL: "http://localhost:1234", T3CODE_DESKTOP_ISOLATED: isolated },
+        execPath: "node",
+        ppid: 1,
+        once: () => undefined,
+      },
+      spawn: (_command, args) => {
+        launchArgs = args;
+        return new NodeEvents.EventEmitter();
+      },
+    });
+    assert.equal(launchArgs.includes("--use-mock-keychain"), isolated === "1");
+  },
+);
+
+it.each(["0", "1"])(
+  "macOS activation launcher passes isolation before the main entry (%s)",
+  (isolated) => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-activation-"));
+    try {
+      const environmentFilePath = NodePath.join(directory, "environment.sh");
+      NodeFS.writeFileSync(
+        environmentFilePath,
+        makeDevelopmentEnvironmentScript({ T3CODE_DESKTOP_ISOLATED: isolated }),
+      );
+      const result = NodeChildProcess.spawnSync(
+        "sh",
+        [
+          "-c",
+          makeDevelopmentLauncherScript({
+            electronBinaryPath: "/bin/echo",
+            desktopRoot: "/desktop",
+            mainEntryPath: "/main.cjs",
+            environmentFilePath,
+          }),
+        ],
+        { encoding: "utf8", env: {} },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.includes("--use-mock-keychain"), isolated === "1");
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);

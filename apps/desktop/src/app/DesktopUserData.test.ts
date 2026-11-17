@@ -138,3 +138,24 @@ it.effect("retries on the next launch when a GPU cache cannot be removed", () =>
     assert.deepStrictEqual(writes, []);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect.each([true, false])(
+  "isolates only development profiles (development=%s)",
+  (isDevelopment) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-isolated-profile-" });
+      yield* fs.makeDirectory(path.join(directory, "T3 Code (Dev)"));
+      const result = yield* resolveUserDataPath({
+        appDataDirectory: directory,
+        isDevelopment,
+        platform: "darwin",
+        isolatedBaseDirectory: path.join(directory, "run"),
+      });
+      assert.equal(
+        result,
+        path.join(directory, isDevelopment ? "run/desktop-user-data" : "t3code-v2"),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
